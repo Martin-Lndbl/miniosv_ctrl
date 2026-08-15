@@ -19,6 +19,7 @@ repetitions of a value reuse it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import subprocess
@@ -139,16 +140,32 @@ def run_once(instance: str, logdir: Path) -> dict:
                     break
                 time.sleep(1)
             ec2().terminate_instances(InstanceIds=[iid])
-        p.send_signal(2)            # let it deregister the AMI; don't wait
+        # aws-deploy.py registers an AMI and snapshot per run and deletes them
+        # on exit, but it does not reliably exit after SIGINT — 13 of each piled
+        # up in one afternoon, one per run. Clean up here and kill the process
+        # tree rather than leaving one behind per point. Signalling the group is
+        # safe because the child was given start_new_session.
+        p.send_signal(2)
         try:
-            p.wait(timeout=20)
+            p.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            pass
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(os.getpgid(p.pid), 9)
 
     if stray := live():             # a launch interrupted before it logged an id
         ec2().terminate_instances(InstanceIds=stray)
 
     text = log.read_text(errors="replace")
+    if m := re.search(r"from (ami-[0-9a-f]+)", text):
+        with contextlib.suppress(Exception):   # cleanup must never fail a run
+            c, ami = ec2(), m.group(1)
+            snaps = [bd["Ebs"]["SnapshotId"]
+                     for img in c.describe_images(ImageIds=[ami])["Images"]
+                     for bd in img.get("BlockDeviceMappings", []) if "Ebs" in bd]
+            c.deregister_image(ImageId=ami)
+            for snap in snaps:
+                c.delete_snapshot(SnapshotId=snap)
+
     row = {k: (c(m.group(1)) if (m := re.search(pat, text, re.M)) else None)
            for k, (pat, c) in METRICS.items()}
     row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
