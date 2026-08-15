@@ -4,18 +4,16 @@ MiniOSv Control Center - Coordination of benchmarks, applications and plots
 ## Getting Started
 
 ```sh
-just --list            # available recipes
-just setup smoltcp-s3  # probe the environment, write .env
-just build <app> -j8   # extra args are passed to make
-just clean smoltcp-s3  # delete the bucket and .env again
+just --list                          # available recipes
+just setup apps/bench/smoltcp-s3     # probe the environment, write .env
+just build apps/bench/smoltcp-s3 -j8 # extra args are passed to make
+just clean apps/bench/smoltcp-s3     # delete the bucket and .env again
 ```
 
-`setup` and `clean` are per bench: they forward to the recipe of the same name in
-`apps/bench/<name>/justfile` (so the smoltcp-s3 pair lives in the `apps` submodule,
-at `apps/bench/smoltcp-s3/justfile`, and can also be run from that directory as a
-plain `just setup` / `just clean`).
-`setup` runs `aws login --remote` first if you are not logged in; `clean` prompts
-before deleting, and `just clean smoltcp-s3 force` skips the prompt.
+`setup`, `build` and `clean` all take a path to the app. `setup` and `clean`
+forward to the recipe of the same name in `<app>/justfile`, which can also be run
+from that directory directly. `setup` logs into AWS if needed; `clean` prompts
+before deleting, and a trailing `force` skips the prompt.
 
 ## Devshells
 ```sh

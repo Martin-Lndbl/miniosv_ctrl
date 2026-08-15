@@ -2,19 +2,18 @@ set dotenv-load := true
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 miniosv := justfile_directory() / "miniosv"
-bench := justfile_directory() / "apps" / "bench"
 
 # List available recipes
 default:
     @just --list
 
-# Run a bench's setup, e.g. 'just setup smoltcp-s3'
-setup name:
-    just --justfile "{{ bench / name }}/justfile" --working-directory "{{ bench / name }}" setup
+# Run a bench's setup, e.g. 'just setup apps/bench/smoltcp-s3'
+setup app:
+    just --justfile "{{ absolute_path(app) }}/justfile" --working-directory "{{ absolute_path(app) }}" setup
 
-# Delete a bench's bucket and .env, e.g. 'just clean smoltcp-s3' ('force' skips the prompt)
-clean name *force:
-    just --justfile "{{ bench / name }}/justfile" --working-directory "{{ bench / name }}" clean {{ force }}
+# Delete a bench's bucket and .env, e.g. 'just clean apps/bench/smoltcp-s3' ('force' skips the prompt)
+clean app *force:
+    just --justfile "{{ absolute_path(app) }}/justfile" --working-directory "{{ absolute_path(app) }}" clean {{ force }}
 
 # Build the boot image against an app; extra args go to make (-j8, arch=aarch64, …)
 build app *args:
