@@ -31,6 +31,21 @@ from pathlib import Path
 import boto3
 import pandas as pd
 
+PUSH_URL = os.environ.get("BENCH_PUSH_URL", "https://push.lndbl.de/claude")
+
+
+def notify(msg: str, title: str, priority: str = "high", tags: str = "") -> None:
+    """Best-effort ntfy push. A sweep is long enough to walk away from, so it
+    reports its own completion — and never fails because of the notifier."""
+    import urllib.request
+    with contextlib.suppress(Exception):
+        req = urllib.request.Request(
+            PUSH_URL, data=msg.encode(), method="POST",
+            headers={"Title": title, "Priority": priority, "Tags": tags,
+                     # Python-urllib's default UA is 403'd upstream.
+                     "User-Agent": "miniosv-bench/1.0"})
+        urllib.request.urlopen(req, timeout=10).read()
+
 ROOT = Path(__file__).resolve().parents[3]
 BENCH = "apps/bench/smoltcp-s3"
 TAG = "miniosv-loader-*"        # created only by miniosv/scripts/aws-deploy.py
@@ -188,6 +203,12 @@ def main() -> int:
                          "bench reaches 11.85 there, so its curve is clipped by "
                          "EC2's allowance rather than by the stack")
     ap.add_argument("--out", type=Path, default=ROOT / "results/smoltcp-s3/sweep.csv")
+    ap.add_argument("--keep-going", action="store_true",
+                    help="continue after an invalid run. The default is to "
+                         "abandon the rest of the queue: an invalid point "
+                         "usually means a defect that the remaining runs will "
+                         "hit too, so continuing just spends money on data "
+                         "that gets discarded")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
@@ -233,7 +254,7 @@ def main() -> int:
         row = run_once(a.instance, a.out.parent / "logs")
         row |= {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "instance": a.instance, "axis": axis, "axis_value": value,
-                "rep": rep, **cfg}
+                "rep": rep, "note": os.environ.get("BENCH_NOTE", ""), **cfg}
         # A point counts only if everything transferred and the RSS model held.
         row["valid"] = bool(row["complete"] and row["syn_retries"] == 0
                             and row["misrouted"] == 0
@@ -248,9 +269,34 @@ def main() -> int:
         print(f"  {row['gbps']} Gbps, {row['workers_actual']} workers, "
               f"{row['conns_clean']}/{row['conns_total']} clean, valid={row['valid']}")
 
+        if not row["valid"] and not a.keep_going:
+            remaining = [(v, r) for v, r in plan
+                         if (v, r) > (value, rep)]
+            msg = (f"{axis}={value} rep={rep} invalid "
+                   f"({row['conns_clean']}/{row['conns_total']} clean, "
+                   f"complete={row['complete']}); abandoning "
+                   f"{len(remaining)} queued runs")
+            print(f"\nSTOPPING: {msg}")
+            notify(msg, title="smoltcp-s3 sweep STOPPED", priority="urgent",
+                   tags="rotating_light")
+            break
+
+    ran = df[df["axis"] == axis] if "axis" in df else df
+    good = ran[ran["valid"] == True] if "valid" in ran else ran   # noqa: E712
+    best = f"{good['gbps'].max():.1f}" if len(good) else "n/a"
+    notify(f"{len(ran)} runs on {a.instance}, {len(good)} valid, best {best} Gbps\n"
+           f"axis {axis}={values}\n{a.out}",
+           title=f"smoltcp-s3 sweep done ({axis})",
+           priority="high", tags="white_check_mark")
     print(f"\nwrote {a.out} ({len(df)} rows)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BaseException as e:      # includes SystemExit from a failed build
+        if not (isinstance(e, SystemExit) and not e.code):
+            notify(f"{type(e).__name__}: {e}", title="smoltcp-s3 sweep FAILED",
+                   priority="urgent", tags="rotating_light")
+        raise
