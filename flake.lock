@@ -28,11 +28,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1786788923,
-        "narHash": "sha256-9UEbalwRn89X68OjERt5kcuemwDUZIpqX8s590vJEN0=",
-        "ref": "refs/heads/feature/rust-devshell",
-        "rev": "ec690cfe3645858d3f64dc2d85d1decf6b6185d9",
-        "revCount": 9013,
+        "lastModified": 1786787235,
+        "narHash": "sha256-8KWI/wkXmma2Gk+VYdIY2BEKUHdvLKolBA/UDIAbo+g=",
+        "ref": "refs/heads/kite/networking",
+        "rev": "697ffc3f7e09c5e6087cccf0d8028900515cd776",
+        "revCount": 9042,
         "type": "git",
         "url": "file:./miniosv"
       },
