@@ -33,6 +33,7 @@
               boto3
               botocore
               pyyaml
+              pandas
             ]
           ))
         ];

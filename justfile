@@ -1,6 +1,5 @@
 set dotenv-load := true
 set shell := ["bash", "-euo", "pipefail", "-c"]
-
 miniosv := justfile_directory() / "miniosv"
 
 # List available recipes
@@ -17,7 +16,7 @@ clean app *force:
 
 # Build the boot image against an app; extra args go to make (-j8, arch=aarch64, …)
 build app *args:
-    make -C "{{ miniosv }}" app="{{ absolute_path(app) }}" {{ args }}
+    make -C "{{ miniosv }}" app="{{ absolute_path(app) }}" -j {{ args }}
 
 # Boot the image under QEMU; extra args go to run.py (--arch aarch64, -m 4G, …)
 run *args:
@@ -27,3 +26,8 @@ run *args:
 deploy instance *args:
     cd "{{ miniosv }}" && "./scripts/aws-deploy.py" "$AWS_REGION" "{{ instance }}" \
         --attach --subnet "$AWS_SUBNET" {{ args }}
+
+# Run a bench's sweep, e.g. 'just bench smoltcp-s3 --sweep conns=1,2,4,8'
+bench name *args:
+    nix develop .#rust --command python3 \
+        "{{ justfile_directory() }}/scripts/bench/{{ name }}/bench.py" {{ args }}
