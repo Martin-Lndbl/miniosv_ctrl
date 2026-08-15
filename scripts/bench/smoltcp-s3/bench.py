@@ -203,6 +203,16 @@ def main() -> int:
                          "bench reaches 11.85 there, so its curve is clipped by "
                          "EC2's allowance rather than by the stack")
     ap.add_argument("--out", type=Path, default=ROOT / "results/smoltcp-s3/sweep.csv")
+    ap.add_argument("--cooldown", type=int, default=600, metavar="SEC",
+                    help="idle time between runs. Back-to-back repetitions are "
+                         "NOT independent: connection setup degraded 2.6ms -> "
+                         "696ms -> 1313ms/conn over three consecutive runs of "
+                         "384 connections to one S3 address, with 99 SYN "
+                         "timeouts by the third, and returned to 2.6ms after "
+                         "~18 minutes idle. Something between the guest and S3 "
+                         "rate-limits connections cumulatively and recovers "
+                         "with time, so runs must be spaced or the results "
+                         "measure the limiter rather than the stack")
     ap.add_argument("--keep-going", action="store_true",
                     help="continue after an invalid run. The default is to "
                          "abandon the rest of the queue: an invalid point "
@@ -224,7 +234,8 @@ def main() -> int:
     plan = [(v, r) for v in values for r in range(1, a.reps + 1)]
     gib = sum({**base, axis: v}["workers"] * {**base, axis: v}["conns"]
               * {**base, axis: v}["block"] for v, _ in plan) / (1 << 30)
-    print(f"instance : {a.instance}\naxis     : {axis} = {values}"
+    print(f"instance : {a.instance}\ncooldown : {a.cooldown}s between runs"
+          f"\naxis     : {axis} = {values}"
           f"\nfixed    : {({k: v for k, v in base.items() if k != axis})}"
           f"\nruns     : {len(plan)} ({len(values)} builds x {a.reps} reps)"
           f"\ntransfer : {gib:.1f} GiB total\nout      : {a.out}")
@@ -239,6 +250,7 @@ def main() -> int:
         print(f"resuming : {len(df)} rows present")
 
     built = None
+    ran_one = False
     for value, rep in plan:
         cfg = {**base, axis: value}
         if not df.empty and ((df.get("axis") == axis)
@@ -250,7 +262,13 @@ def main() -> int:
             build(cfg, ip)
             built = cfg
 
+        if ran_one and a.cooldown:
+            print(f"    cooling down {a.cooldown}s before the next run",
+                  flush=True)
+            time.sleep(a.cooldown)
+
         print(f"--- {axis}={value} rep={rep} ---", flush=True)
+        ran_one = True
         row = run_once(a.instance, a.out.parent / "logs")
         row |= {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "instance": a.instance, "axis": axis, "axis_value": value,
