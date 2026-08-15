@@ -1,0 +1,6 @@
+[submodule "miniosv"]
+	path = miniosv
+	url = git@github.com:Martin-Lndbl/miniosv.git
+[submodule "apps"]
+	path = apps
+	url = git@github.com:Martin-Lndbl/miniosv_apps.git
