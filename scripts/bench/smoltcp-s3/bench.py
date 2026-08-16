@@ -120,17 +120,9 @@ class SmoltcpS3(Bench):
                         break
                     time.sleep(1)
                 ec2().terminate_instances(InstanceIds=[iid])
-            # SIGINT is aws-deploy.py's teardown: it deregisters the AMI and
-            # deletes the snapshot itself. Signal the GROUP, not p — p is
-            # `just`, which does not forward it, so aws-deploy.py never saw it
-            # and no deploy log ever contained "Deregistering AMI".
-            # start_new_session makes the group exactly this deploy.
-            #
-            # The 75s is a ceiling, not a delay: wait() returns on exit, and
-            # the instance is already terminating by the time we get here, so
-            # aws-deploy's own 30x2s poll should break on its first iteration.
-            # Hitting the ceiling means killing it mid-teardown, which leaks an
-            # AMI and a snapshot per run, so say so rather than swallow it.
+            # SIGINT runs aws-deploy.py's teardown. To the GROUP, not p: p is
+            # `just`, which does not forward it. The 75s is a ceiling; hitting
+            # it kills the teardown and leaks an AMI, so say so.
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(os.getpgid(p.pid), signal.SIGINT)
             try:

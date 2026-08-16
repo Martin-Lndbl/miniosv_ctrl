@@ -9,10 +9,9 @@ decides what the numbers mean, plus prose saying what it measures and why.
 Reproducing one should need nothing but its name.
 
 Each [[points]] entry is one configuration, run as its own sweep invocation
-into a shared CSV -- the resume key is (axis, axis_value, rep), so points
-accumulate rather than collide. Points are separate invocations because a knob
-other than the axis may co-vary with it: worker-scaling derives conns from
-workers to hold total connections constant, which a single --sweep cannot say.
+into a shared CSV; the resume key (axis, axis_value, rep) keeps them apart.
+Separate invocations because a knob other than the axis may co-vary with it,
+which a single --sweep cannot express.
 """
 
 from __future__ import annotations
@@ -54,8 +53,7 @@ def main() -> int:
         type=int,
         default=None,
         metavar="SEC",
-        help="idle time between reps of a point; overrides the "
-        "experiment's own value",
+        help="idle time between reps; overrides the experiment's value",
     )
     ap.add_argument(
         "--point-cooldown",
@@ -72,9 +70,8 @@ def main() -> int:
     axis, points = x["axis"], x["points"]
     out = ROOT / x["out"]
     driver = ROOT / "scripts/bench" / Path(x["bench"]).name / "bench.py"
-    # Two distinct waits: between reps of one point (runner's own), and between
-    # points here. They default to the same value but need not be equal — the
-    # gap between points already absorbs a rebuild.
+    # Between reps (runner's own) and between points (here); the latter
+    # already absorbs a rebuild, so they need not be equal.
     cooldown = a.cooldown if a.cooldown is not None else x.get("cooldown", 600)
     point_cooldown = (
         a.point_cooldown
@@ -146,8 +143,7 @@ def main() -> int:
 
     if a.dry_run or a.no_plot:
         return 0
-    # Loud but not fatal: the runs are already in the CSV, so a plotting fault
-    # must not read as a failed experiment — nor pass silently after hours.
+    # Loud but not fatal: the runs are already in the CSV.
     r = subprocess.run(
         [
             sys.executable,

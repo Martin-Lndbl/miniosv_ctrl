@@ -20,8 +20,7 @@ SETUP_BASELINE_MS = 2.6
 
 
 def notify(msg: str, title: str, tags: str = "") -> None:
-    """Report a run to BENCH_PUSH_URL, if one is configured. Failures are
-    suppressed: a benchmark must not die because a notification did not land."""
+    """Push to BENCH_PUSH_URL if set; never fails a sweep."""
     url = os.environ.get("BENCH_PUSH_URL", "").strip()
     if not url:
         return
@@ -118,8 +117,7 @@ class Bench:
             row.get("complete")
             and row.get("syn_retries") == 0
             and row.get("misrouted") == 0
-            # `or 0`: an unreported field parses as None, and None == 0 is
-            # False, which would invalidate every run on that bench.
+            # `or 0`: an unreported field is None, and None == 0 is False.
             and (row.get("http_bad") or 0) == 0
             and row.get("conns_total") == row.get("conns_clean")
         )
@@ -141,43 +139,33 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         type=int,
         default=600,
         metavar="SEC",
-        help="idle time between runs. Back-to-back reps are NOT "
-        "independent: setup went 2.6ms -> 696ms -> 1313ms/conn "
-        "over three consecutive runs, 99 SYN timeouts by the "
-        "third, recovering after ~18min idle. Unspaced runs "
-        "measure that limiter, not the stack",
+        help="idle time between runs. Unspaced reps are not independent: "
+        "setup went 2.6 -> 1313 ms/conn over three consecutive runs",
     )
     ap.add_argument(
         "--interleave",
         action="store_true",
-        help="rep-major (a/b/a/b) not value-major (a/a/b/b), so "
-        "drift hits both arms equally",
+        help="rep-major (a/b/a/b) not value-major, so drift hits both arms",
     )
     ap.add_argument(
         "--keep-going",
         action="store_true",
-        help="continue after an invalid run. Default abandons the "
-        "queue: the rest will usually hit the same defect",
+        help="continue after an invalid run; the default abandons the queue",
     )
     ap.add_argument(
         "--max-vm-seconds",
         type=int,
         default=bench.max_vm_seconds,
         metavar="SEC",
-        help="ceiling on one instance's life once it exists, not a "
-        "delay: the wait breaks as soon as the guest prints its "
-        "verdict. Raise it when a point does more work per run, "
-        "e.g. one worker moving the whole transfer",
+        help="ceiling on one instance's life, not a delay; raise it when a "
+        "point does more work per run",
     )
     ap.add_argument(
         "--target-ip",
         default=None,
         metavar="ADDR",
-        help="S3 address to compile in. Resolved fresh when "
-        "omitted, which is per-invocation: a sweep split "
-        "across invocations then measures different S3 "
-        "front-ends, and they do not perform alike. Pin it "
-        "to keep one experiment on one endpoint",
+        help="S3 address to compile in; resolved per invocation when "
+        "omitted, and front-ends do not perform alike",
     )
     ap.add_argument("--dry-run", action="store_true")
     for knob, (_env, parser) in bench.knobs.items():
@@ -284,9 +272,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         if row.get("gbps") and row.get("workers_actual"):
             row["gbps_per_worker"] = round(row["gbps"] / row["workers_actual"], 4)
         if row.get("setup_ms") and row.get("conns_total"):
-            # setup_ms sums overlapping waits, so per-connection is the
-            # comparable figure. Flagged, not invalidated: throughput held to a
-            # 0.4% spread across a 33x swing in it.
+            # setup_ms sums overlapping waits; per-connection is comparable.
             per = row["setup_ms"] / row["conns_total"]
             row["setup_ms_per_conn"] = round(per, 2)
             row["setup_degraded"] = per > 10 * SETUP_BASELINE_MS

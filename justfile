@@ -1,4 +1,7 @@
 set dotenv-load := true
+# So shell recipes can forward "$@" with quoting intact; without it
+# `--title "a b"` reaches the script as two arguments.
+set positional-arguments
 set shell := ["bash", "-euo", "pipefail", "-c"]
 miniosv := justfile_directory() / "miniosv"
 
@@ -29,8 +32,10 @@ deploy instance *args:
 
 # Reproduce a stored experiment end to end, e.g. 'just reproduce conns-plateau'
 reproduce name *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
     nix develop "{{ justfile_directory() }}#rust" --command python3 \
-        "{{ justfile_directory() }}/scripts/bench/experiment.py" "{{ name }}" {{ args }}
+        "{{ justfile_directory() }}/scripts/bench/experiment.py" "$@"
 
 # List stored experiments
 experiments:
@@ -39,8 +44,10 @@ experiments:
 
 # Plot a sweep, e.g. 'just plot smoltcp-s3' or 'just plot results/x/sweep-workers.csv'
 plot csv *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
     nix develop "{{ justfile_directory() }}#rust" --command python3 \
-        "{{ justfile_directory() }}/scripts/bench/plot.py" "{{ csv }}" {{ args }}
+        "{{ justfile_directory() }}/scripts/bench/plot.py" "$@"
 
 # Run a bench's sweep, e.g. 'just bench apps/bench/smoltcp-s3 --sweep conns=1,2,4,8'
 bench app *args:
@@ -53,4 +60,4 @@ bench app *args:
         echo "no sweep driver for {{ app }} (looked for $driver)" >&2
         exit 1
     fi
-    nix develop "{{ justfile_directory() }}#rust" --command python3 "$driver" {{ args }}
+    nix develop "{{ justfile_directory() }}#rust" --command python3 "$driver" "${@:2}"
