@@ -10,6 +10,11 @@ cooldown = 600
 max_vm_seconds = 110
 out      = "results/smoltcp-s3/sweep.csv"
 
+# Blank resolves once for the whole experiment. S3 front-ends do not perform
+# alike: 29-30 Gbps on 3.5.217.210 vs 18 on 16.12.9.50, same configuration. Pin
+# one to repeat against it -- S3 rotates them, so a stale value fails the build.
+target_ip = ""
+
 # Held constant at every point.
 [fixed]
 workers = 8
