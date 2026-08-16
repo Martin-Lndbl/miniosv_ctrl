@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import re
 import subprocess
@@ -14,6 +15,25 @@ import boto3
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def notify(msg: str, title: str, tags: str = "") -> None:
+    """Report a run to BENCH_PUSH_URL, if `just setup` was given one.
+
+    A sweep runs for hours unattended, so it says how it is doing. Failures are
+    suppressed on purpose: a benchmark must not die because a phone did not get
+    a message. Unset means no endpoint was configured, which is not an error.
+    """
+    url = os.environ.get("BENCH_PUSH_URL", "").strip()
+    if not url:
+        return
+    import urllib.request
+    with contextlib.suppress(Exception):
+        urllib.request.urlopen(urllib.request.Request(
+            url, data=msg.encode(), method="POST",
+            headers={"Title": title, "Priority": "high", "Tags": tags,
+                     # Python-urllib's default UA is 403'd by some endpoints.
+                     "User-Agent": "miniosv-bench/1.0"}), timeout=10).read()
 
 
 def size(text: str) -> int:
@@ -197,6 +217,11 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         print(f"  {row.get('gbps')} Gbps, {row.get('workers_actual')} workers, "
               f"{row.get('conns_clean')}/{row.get('conns_total')} clean, "
               f"valid={row['valid']}")
+        notify(f"{row.get('gbps')} Gbps | {row.get('conns_clean')}/"
+               f"{row.get('conns_total')} clean | setup {row.get('setup_ms')} ms",
+               title=f"[{idx + 1}/{len(plan)}] {axis}={value} rep {rep} "
+                     f"{'OK' if row['valid'] else 'INVALID'}",
+               tags="white_check_mark" if row["valid"] else "warning")
 
         if not row["valid"] and not a.keep_going:
             msg = (f"{axis}={value} rep={rep} invalid "
@@ -204,6 +229,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
                    f"complete={row.get('complete')}); abandoning "
                    f"{len(plan) - idx - 1} queued runs")
             print(f"\nSTOPPING: {msg}")
+            notify(msg, title=f"{bench.name} sweep STOPPED", tags="rotating_light")
             break
 
     ran = df[df["axis"] == axis] if "axis" in df else df
