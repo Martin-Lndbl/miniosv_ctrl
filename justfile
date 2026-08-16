@@ -27,7 +27,15 @@ deploy instance *args:
     cd "{{ miniosv }}" && "./scripts/aws-deploy.py" "$AWS_REGION" "{{ instance }}" \
         --attach --subnet "$AWS_SUBNET" {{ args }}
 
-# Run a bench's sweep, e.g. 'just bench smoltcp-s3 --sweep conns=1,2,4,8'
-bench name *args:
-    nix develop .#rust --command python3 \
-        "{{ justfile_directory() }}/scripts/bench/{{ name }}/bench.py" {{ args }}
+# Run a bench's sweep, e.g. 'just bench apps/bench/smoltcp-s3 --sweep conns=1,2,4,8'
+bench app *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Takes a path like every other recipe here; the driver is
+    # scripts/bench/<name>/bench.py where <name> is the path's last component.
+    driver="{{ justfile_directory() }}/scripts/bench/{{ file_name(app) }}/bench.py"
+    if [ ! -f "$driver" ]; then
+        echo "no sweep driver for {{ app }} (looked for $driver)" >&2
+        exit 1
+    fi
+    nix develop "{{ justfile_directory() }}#rust" --command python3 "$driver" {{ args }}
