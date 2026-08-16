@@ -1,0 +1,38 @@
+name = "worker-scaling"
+title = "GET throughput vs worker threads at constant offered load"
+description = "Does the stack parallelise across RSS queues?"
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "workers"
+reps     = 3
+cooldown = 600
+max_vm_seconds = 300    # one worker moves the whole transfer; 110 is too tight
+out      = "results/smoltcp-s3/sweep-workers.csv"
+
+[fixed]
+block = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+
+# conns = 128 / workers, so total connections stay at 128 throughout.
+[[points]]
+workers = 1
+conns   = 128
+[[points]]
+workers = 2
+conns   = 64
+[[points]]
+workers = 4
+conns   = 32
+[[points]]
+workers = 8
+conns   = 16
+[[points]]
+workers = 16
+conns   = 8
+[[points]]
+workers = 32
+conns   = 4

@@ -15,6 +15,23 @@ forward to the recipe of the same name in `<app>/justfile`, which can also be ru
 from that directory directly. `setup` logs into AWS if needed; `clean` prompts
 before deleting, and a trailing `force` skips the prompt.
 
+## Experiments
+
+```sh
+just experiments                 # stored experiments, with titles
+just reproduce conns-plateau     # env check, build, sweep, plot
+just plot smoltcp-s3             # replot from an existing CSV
+```
+
+An experiment is a TOML file in `experiments/` holding every parameter that
+decides what the numbers mean — instance, axis, held-constant knobs, reps,
+cooldowns, the VM cap — so reproducing one needs nothing but its name. Add
+`--dry-run` to print the plan without launching anything.
+
+Results land in `results/<bench>/`: a CSV of one row per run, plus a `.png` and
+a `.md` table per plot. Sweeps resume from the CSV, so an interrupted run
+continues where it stopped.
+
 ## Devshells
 ```sh
 nix develop            # extended miniosv default shell

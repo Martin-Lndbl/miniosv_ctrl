@@ -27,6 +27,21 @@ deploy instance *args:
     cd "{{ miniosv }}" && "./scripts/aws-deploy.py" "$AWS_REGION" "{{ instance }}" \
         --attach --subnet "$AWS_SUBNET" {{ args }}
 
+# Reproduce a stored experiment end to end, e.g. 'just reproduce conns-plateau'
+reproduce name *args:
+    nix develop "{{ justfile_directory() }}#rust" --command python3 \
+        "{{ justfile_directory() }}/scripts/bench/experiment.py" "{{ name }}" {{ args }}
+
+# List stored experiments
+experiments:
+    @grep -H '^title' "{{ justfile_directory() }}"/experiments/*.toml \
+        | sed 's|.*/||; s|\.toml:title *= *"| — |; s|"$||'
+
+# Plot a sweep, e.g. 'just plot smoltcp-s3' or 'just plot results/x/sweep-workers.csv'
+plot csv *args:
+    nix develop "{{ justfile_directory() }}#rust" --command python3 \
+        "{{ justfile_directory() }}/scripts/bench/plot.py" "{{ csv }}" {{ args }}
+
 # Run a bench's sweep, e.g. 'just bench apps/bench/smoltcp-s3 --sweep conns=1,2,4,8'
 bench app *args:
     #!/usr/bin/env bash

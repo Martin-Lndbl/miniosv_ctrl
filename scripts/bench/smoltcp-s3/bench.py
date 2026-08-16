@@ -1,320 +1,132 @@
 #!/usr/bin/env python3
-"""Sweep one compile-time knob of apps/bench/smoltcp-s3 and record a CSV row per run.
+"""Sweep one compile-time knob of apps/bench/smoltcp-s3, one CSV row per run.
 
-    just bench smoltcp-s3 --sweep conns=1,2,3,4,6,8,12,16,24
-    just bench smoltcp-s3 --sweep workers=1,2,4,8 --conns 4
-    just bench smoltcp-s3 --sweep block=16M,64M,256M --conns 4 --reps 1
-    just bench smoltcp-s3 --sweep conns=1,4 --dry-run
+    just bench apps/bench/smoltcp-s3 --sweep conns=1,2,3,4,6,8,12,16,24
+    just bench apps/bench/smoltcp-s3 --sweep workers=1,2,4,8 --conns 4
+    just bench apps/bench/smoltcp-s3 --sweep block=16M,64M,256M --conns 4 --reps 1
 
-Any knob can be the axis; the others stay fixed and are recorded on every row,
-so CSVs from different sweeps concatenate and stay interpretable. Holding block
-size fixed while varying parallelism matters: the bench used to split a fixed
-total across workers, so request size shrank as parallelism rose and a
-"throughput vs workers" curve was also a "throughput vs request size" curve.
+Knobs are compiled in, so each axis value needs its own build; reps reuse it.
+Non-axis knobs stay fixed and are recorded per row, so block size no longer
+shrinks as parallelism rises and a throughput-vs-workers curve is only that.
 
-Knobs are compiled in, so each axis value needs its own image build;
-repetitions of a value reuse it.
+Sweep machinery is in ../runner.py, shared with competitors/linux-s3.
 """
 
 from __future__ import annotations
 
-import argparse
 import contextlib
 import os
 import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
-import boto3
-import pandas as pd
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-PUSH_URL = os.environ.get("BENCH_PUSH_URL", "https://push.lndbl.de/claude")
+import runner                                                    # noqa: E402
+from runner import ROOT, Bench, ec2, parse, size                 # noqa: E402
 
-
-def notify(msg: str, title: str, priority: str = "high", tags: str = "") -> None:
-    """Best-effort ntfy push. A sweep is long enough to walk away from, so it
-    reports its own completion — and never fails because of the notifier."""
-    import urllib.request
-    with contextlib.suppress(Exception):
-        req = urllib.request.Request(
-            PUSH_URL, data=msg.encode(), method="POST",
-            headers={"Title": title, "Priority": priority, "Tags": tags,
-                     # Python-urllib's default UA is 403'd upstream.
-                     "User-Agent": "miniosv-bench/1.0"})
-        urllib.request.urlopen(req, timeout=10).read()
-
-ROOT = Path(__file__).resolve().parents[3]
 BENCH = "apps/bench/smoltcp-s3"
-TAG = "miniosv-loader-*"        # created only by miniosv/scripts/aws-deploy.py
-MAX_VM_SECONDS = 110            # keep every run well under two minutes
-
-KNOBS = {"workers": "BENCH_WORKERS",
-         "conns": "BENCH_CONNS_PER_WORKER",
-         "block": "BENCH_BLOCK_SIZE"}
-
-# field -> (pattern, cast). The guest prints these; see osv_app_main().
-METRICS = {
-    "workers_actual": (r"^rss: (\d+) queues", int),
-    "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
-    "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
-    "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
-    "conns_clean": (r"^connections\s+: (\d+)/", int),
-    "conns_total": (r"^connections\s+: \d+/(\d+)", int),
-    "syn_retries": (r"^syn retries\s+: (\d+)", int),
-    "misrouted": (r"^misrouted rx\s+: (\d+)", int),
-    "setup_ms": (r"^setup\s+: (\d+) ms", int),
-    "bytes": (r"\((\d+) bytes\)", int),
-    "instance_id": (r"Instance running: (i-[0-9a-f]+)", str),
-}
 
 
-def size(text: str) -> int:
-    """Accept 128M / 2G / 1048576, matching what .env holds."""
-    m = re.fullmatch(r"(\d+)\s*([KMGT]?)i?B?", str(text).strip(), re.I)
-    if not m:
-        raise argparse.ArgumentTypeError(f"bad size: {text}")
-    return int(m.group(1)) * {"": 1, "K": 1 << 10, "M": 1 << 20,
-                              "G": 1 << 30, "T": 1 << 40}[m.group(2).upper()]
+class SmoltcpS3(Bench):
+    name = "smoltcp-s3"
+    knobs = {"workers": ("BENCH_WORKERS", size),
+             "conns": ("BENCH_CONNS_PER_WORKER", size),
+             "block": ("BENCH_BLOCK_SIZE", size)}
+    defaults = {"workers": 8, "conns": 24, "block": 128 << 20}
+    # Created only by miniosv/scripts/aws-deploy.py.
+    instance_tag = "miniosv-loader-*"
+    # 50 Gbps sustained; c7i.8xlarge caps at 12.5 and the bench reaches 11.85
+    # there, so its curve is clipped by EC2's allowance rather than by the stack.
+    default_instance = "c6in.8xlarge"
+    max_vm_seconds = 110            # keep every run well under two minutes
 
+    # field -> (pattern, cast). The guest prints these; see osv_app_main().
+    metrics = {
+        "workers_actual": (r"^rss: (\d+) queues", int),
+        "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
+        "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
+        "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
+        "conns_clean": (r"^connections\s+: (\d+)/", int),
+        "conns_total": (r"^connections\s+: \d+/(\d+)", int),
+        "syn_retries": (r"^syn retries\s+: (\d+)", int),
+        "misrouted": (r"^misrouted rx\s+: (\d+)", int),
+        "setup_ms": (r"^setup\s+: (\d+) ms", int),
+        "bytes": (r"\((\d+) bytes\)", int),
+        "instance_id": (r"Instance running: (i-[0-9a-f]+)", str),
+    }
 
-def ec2():
-    return boto3.client("ec2", region_name=os.environ["AWS_REGION"])
+    def build(self, cfg: dict, ip: str) -> None:
+        """Bake this point's constants in; build.rs marks each knob
+        rerun-if-env-changed so cargo rebuilds when one moves. Must run inside
+        the devshell, whose `set -a; . .env` shellHook would otherwise win."""
+        env = {**os.environ, "AWS_TARGET_IP": ip,
+               **{self.knobs[k][0]: str(v) for k, v in cfg.items()}}
+        r = subprocess.run(["just", "build", BENCH, "-j16"],
+                           cwd=ROOT, env=env, capture_output=True, text=True)
+        if r.returncode:
+            raise SystemExit(f"build failed for {cfg}:\n{r.stdout}\n{r.stderr}")
 
+    def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
+        """Deploy, wait for the guest's verdict, terminate, parse. Termination is
+        an API call: a signal can resolve to the driver's own pgid and orphan a
+        billing instance."""
+        logdir.mkdir(parents=True, exist_ok=True)
+        log = logdir / f"deploy-{instance}-{int(time.time())}.log"
+        if up := self.live():
+            raise SystemExit(f"refusing to launch, instance still up: {up}")
 
-def live() -> list[str]:
-    r = ec2().describe_instances(Filters=[
-        {"Name": "tag:Name", "Values": [TAG]},
-        {"Name": "instance-state-name", "Values": ["pending", "running"]}])
-    return [i["InstanceId"] for x in r["Reservations"] for i in x["Instances"]]
-
-
-def target_ip() -> str:
-    """The guest has no resolver, so the address is compiled in. S3 rotates it
-    often enough to matter (three addresses in one afternoon) and a stale value
-    now fails the build-time assert, so resolve fresh rather than trust .env."""
-    host = f"{os.environ['AWS_BUCKET']}.s3.{os.environ['AWS_REGION']}.amazonaws.com"
-    out = subprocess.run(["getent", "ahostsv4", host],
-                         capture_output=True, text=True).stdout
-    for line in out.splitlines():
-        if "STREAM" in line:
-            return line.split()[0]
-    raise SystemExit(f"could not resolve {host}")
-
-
-def build(cfg: dict, ip: str) -> None:
-    """Bake this point's constants in.
-
-    build.rs declares each knob via rerun-if-env-changed, so cargo rebuilds when
-    one moves; without it a sweep would redeploy the first build's constants at
-    every point while appearing to work. We must already be inside the devshell
-    (the justfile recipe arranges it): its shellHook does `set -a; . .env` and
-    would otherwise overwrite these on the way in.
-    """
-    env = {**os.environ, "AWS_TARGET_IP": ip,
-           **{KNOBS[k]: str(v) for k, v in cfg.items()}}
-    r = subprocess.run(["just", "build", BENCH, "-j16"],
-                       cwd=ROOT, env=env, capture_output=True, text=True)
-    if r.returncode:
-        raise SystemExit(f"build failed for {cfg}:\n{r.stdout}\n{r.stderr}")
-
-
-def run_once(instance: str, logdir: Path) -> dict:
-    """Deploy, wait for the guest's verdict, terminate, parse.
-
-    Termination is an API call rather than a signal: `setsid` makes the child's
-    pgid resolve in ways that can kill the driver instead of the deploy, which
-    has orphaned billing instances before.
-    """
-    logdir.mkdir(parents=True, exist_ok=True)
-    log = logdir / f"deploy-{instance}-{int(time.time())}.log"
-    if up := live():
-        raise SystemExit(f"refusing to launch, instance still up: {up}")
-
-    with log.open("w") as fh:
-        p = subprocess.Popen(["just", "deploy", instance], cwd=ROOT,
-                             stdout=fh, stderr=subprocess.STDOUT,
-                             start_new_session=True)
-        iid = None
-        for _ in range(1500):       # wait for the instance to exist
-            if m := re.search(r"Instance running: (i-[0-9a-f]+)",
-                              log.read_text(errors="replace")):
-                iid = m.group(1)
-                break
-            if p.poll() is not None:
-                break
-            time.sleep(1)
-        if iid:                     # billing starts here: cap it
-            for _ in range(MAX_VM_SECONDS):
-                if re.search(r"^(COMPLETE|INCOMPLETE):",
-                             log.read_text(errors="replace"), re.M):
+        with log.open("w") as fh:
+            p = subprocess.Popen(["just", "deploy", instance], cwd=ROOT,
+                                 stdout=fh, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+            iid = None
+            for _ in range(1500):       # wait for the instance to exist
+                if m := re.search(r"Instance running: (i-[0-9a-f]+)",
+                                  log.read_text(errors="replace")):
+                    iid = m.group(1)
                     break
                 if p.poll() is not None:
                     break
                 time.sleep(1)
-            ec2().terminate_instances(InstanceIds=[iid])
-        # aws-deploy.py registers an AMI and snapshot per run and deletes them
-        # on exit, but it does not reliably exit after SIGINT — 13 of each piled
-        # up in one afternoon, one per run. Clean up here and kill the process
-        # tree rather than leaving one behind per point. Signalling the group is
-        # safe because the child was given start_new_session.
-        p.send_signal(2)
-        try:
-            p.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(os.getpgid(p.pid), 9)
+            if iid:                     # billing starts here: cap it
+                for _ in range(self.max_vm_seconds):
+                    if re.search(r"^(COMPLETE|INCOMPLETE):",
+                                 log.read_text(errors="replace"), re.M):
+                        break
+                    if p.poll() is not None:
+                        break
+                    time.sleep(1)
+                ec2().terminate_instances(InstanceIds=[iid])
+            # SIGINT is aws-deploy.py's teardown: it deregisters the AMI and
+            # deletes the snapshot itself, and both are synchronous, so once it
+            # exits there is nothing left in flight. wait() returns on exit —
+            # the 75s is a ceiling, not a delay, and costs ~2s in practice
+            # because we already terminated the instance and its
+            # describe_instances poll therefore exits on the first iteration.
+            # Hitting the ceiling means killing it mid-teardown, which is what
+            # leaked 13 AMIs in an afternoon, so say so rather than swallow it.
+            p.send_signal(2)
+            try:
+                p.wait(timeout=75)
+            except subprocess.TimeoutExpired:
+                print("WARN: aws-deploy.py did not finish its teardown in 75s; "
+                      "killing it — check for a leaked AMI and snapshot",
+                      flush=True)
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(os.getpgid(p.pid), 9)
 
-    if stray := live():             # a launch interrupted before it logged an id
-        ec2().terminate_instances(InstanceIds=stray)
+        if stray := self.live():        # a launch interrupted before it logged an id
+            ec2().terminate_instances(InstanceIds=stray)
 
-    text = log.read_text(errors="replace")
-    if m := re.search(r"from (ami-[0-9a-f]+)", text):
-        with contextlib.suppress(Exception):   # cleanup must never fail a run
-            c, ami = ec2(), m.group(1)
-            snaps = [bd["Ebs"]["SnapshotId"]
-                     for img in c.describe_images(ImageIds=[ami])["Images"]
-                     for bd in img.get("BlockDeviceMappings", []) if "Ebs" in bd]
-            c.deregister_image(ImageId=ami)
-            for snap in snaps:
-                c.delete_snapshot(SnapshotId=snap)
-
-    row = {k: (c(m.group(1)) if (m := re.search(pat, text, re.M)) else None)
-           for k, (pat, c) in METRICS.items()}
-    row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
-    row["log"] = log.name
-    return row
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sweep", default="conns=1,2,3,4,6,8,12,16,24",
-                    metavar="KNOB=V1,V2", help=f"axis to vary: {'/'.join(KNOBS)}")
-    ap.add_argument("--workers", type=size, default=8)
-    ap.add_argument("--conns", type=size, default=24)
-    ap.add_argument("--block", type=size, default=128 << 20,
-                    help="bytes per request; one request per connection")
-    ap.add_argument("--reps", type=int, default=3)
-    ap.add_argument("--instance", default="c6in.8xlarge",
-                    help="50 Gbps sustained; c7i.8xlarge caps at 12.5 and the "
-                         "bench reaches 11.85 there, so its curve is clipped by "
-                         "EC2's allowance rather than by the stack")
-    ap.add_argument("--out", type=Path, default=ROOT / "results/smoltcp-s3/sweep.csv")
-    ap.add_argument("--cooldown", type=int, default=600, metavar="SEC",
-                    help="idle time between runs. Back-to-back repetitions are "
-                         "NOT independent: connection setup degraded 2.6ms -> "
-                         "696ms -> 1313ms/conn over three consecutive runs of "
-                         "384 connections to one S3 address, with 99 SYN "
-                         "timeouts by the third, and returned to 2.6ms after "
-                         "~18 minutes idle. Something between the guest and S3 "
-                         "rate-limits connections cumulatively and recovers "
-                         "with time, so runs must be spaced or the results "
-                         "measure the limiter rather than the stack")
-    ap.add_argument("--keep-going", action="store_true",
-                    help="continue after an invalid run. The default is to "
-                         "abandon the rest of the queue: an invalid point "
-                         "usually means a defect that the remaining runs will "
-                         "hit too, so continuing just spends money on data "
-                         "that gets discarded")
-    ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args()
-
-    axis, _, raw = a.sweep.partition("=")
-    if axis not in KNOBS or not raw:
-        raise SystemExit(f"--sweep must be one of {list(KNOBS)}, e.g. conns=1,2,4")
-    values = [size(v) for v in raw.split(",")]
-    base = {"workers": a.workers, "conns": a.conns, "block": a.block}
-    for req in ("AWS_BUCKET", "AWS_REGION"):
-        if req not in os.environ:
-            raise SystemExit(f"{req} missing — run `just setup {BENCH}`")
-
-    plan = [(v, r) for v in values for r in range(1, a.reps + 1)]
-    gib = sum({**base, axis: v}["workers"] * {**base, axis: v}["conns"]
-              * {**base, axis: v}["block"] for v, _ in plan) / (1 << 30)
-    print(f"instance : {a.instance}\ncooldown : {a.cooldown}s between runs"
-          f"\naxis     : {axis} = {values}"
-          f"\nfixed    : {({k: v for k, v in base.items() if k != axis})}"
-          f"\nruns     : {len(plan)} ({len(values)} builds x {a.reps} reps)"
-          f"\ntransfer : {gib:.1f} GiB total\nout      : {a.out}")
-    if a.dry_run:
-        return 0
-
-    ip = target_ip()
-    print(f"target   : {ip}")
-    a.out.parent.mkdir(parents=True, exist_ok=True)
-    df = pd.read_csv(a.out) if a.out.exists() else pd.DataFrame()
-    if not df.empty:
-        print(f"resuming : {len(df)} rows present")
-
-    built = None
-    ran_one = False
-    for value, rep in plan:
-        cfg = {**base, axis: value}
-        if not df.empty and ((df.get("axis") == axis)
-                             & (df.get("axis_value") == value)
-                             & (df.get("rep") == rep)).any():
-            continue
-        if cfg != built:
-            print(f"\n=== building {cfg} ===", flush=True)
-            build(cfg, ip)
-            built = cfg
-
-        if ran_one and a.cooldown:
-            print(f"    cooling down {a.cooldown}s before the next run",
-                  flush=True)
-            time.sleep(a.cooldown)
-
-        print(f"--- {axis}={value} rep={rep} ---", flush=True)
-        ran_one = True
-        row = run_once(a.instance, a.out.parent / "logs")
-        row |= {"timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "instance": a.instance, "axis": axis, "axis_value": value,
-                "rep": rep, "note": os.environ.get("BENCH_NOTE", ""), **cfg}
-        # A point counts only if everything transferred and the RSS model held.
-        row["valid"] = bool(row["complete"] and row["syn_retries"] == 0
-                            and row["misrouted"] == 0
-                            and row["conns_total"] == row["conns_clean"])
-        if row["bytes"] and row["elapsed_s"]:
-            row["est_rx_pps"] = round(row["bytes"] / 1460 / row["elapsed_s"])
-        if row["gbps"] and row["workers_actual"]:
-            row["gbps_per_worker"] = round(row["gbps"] / row["workers_actual"], 4)
-
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-        df.to_csv(a.out, index=False)   # a partial sweep survives interruption
-        print(f"  {row['gbps']} Gbps, {row['workers_actual']} workers, "
-              f"{row['conns_clean']}/{row['conns_total']} clean, valid={row['valid']}")
-
-        if not row["valid"] and not a.keep_going:
-            remaining = [(v, r) for v, r in plan
-                         if (v, r) > (value, rep)]
-            msg = (f"{axis}={value} rep={rep} invalid "
-                   f"({row['conns_clean']}/{row['conns_total']} clean, "
-                   f"complete={row['complete']}); abandoning "
-                   f"{len(remaining)} queued runs")
-            print(f"\nSTOPPING: {msg}")
-            notify(msg, title="smoltcp-s3 sweep STOPPED", priority="urgent",
-                   tags="rotating_light")
-            break
-
-    ran = df[df["axis"] == axis] if "axis" in df else df
-    good = ran[ran["valid"] == True] if "valid" in ran else ran   # noqa: E712
-    best = f"{good['gbps'].max():.1f}" if len(good) else "n/a"
-    notify(f"{len(ran)} runs on {a.instance}, {len(good)} valid, best {best} Gbps\n"
-           f"axis {axis}={values}\n{a.out}",
-           title=f"smoltcp-s3 sweep done ({axis})",
-           priority="high", tags="white_check_mark")
-    print(f"\nwrote {a.out} ({len(df)} rows)")
-    return 0
+        text = log.read_text(errors="replace")
+        row = parse(text, self.metrics)
+        row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
+        row["log"] = log.name
+        return row
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except BaseException as e:      # includes SystemExit from a failed build
-        if not (isinstance(e, SystemExit) and not e.code):
-            notify(f"{type(e).__name__}: {e}", title="smoltcp-s3 sweep FAILED",
-                   priority="urgent", tags="rotating_light")
-        raise
+    runner.cli(SmoltcpS3())

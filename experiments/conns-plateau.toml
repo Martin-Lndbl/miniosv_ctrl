@@ -1,0 +1,46 @@
+name = "conns-plateau"
+title = "GET throughput vs concurrent connections per worker"
+description = "Where do more concurrent connections stop increasing throughput?"
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "conns"
+reps     = 3
+cooldown = 600
+max_vm_seconds = 110
+out      = "results/smoltcp-s3/sweep.csv"
+
+# Held constant at every point.
+[fixed]
+workers = 8
+block   = "128M"        # per request; one request per connection
+
+# Compiled into the guest, so they change what the numbers mean. TLS_STUB=0
+# decrypts through rustls and asserts byte-exactness; =1 discards ciphertext
+# and measured 44.3 vs 33.1 Gbps at 48 conns, which is not the same experiment.
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+
+[[points]]
+conns = 48
+[[points]]
+conns = 32
+[[points]]
+conns = 24
+[[points]]
+conns = 16
+[[points]]
+conns = 12
+[[points]]
+conns = 8
+[[points]]
+conns = 6
+[[points]]
+conns = 4
+[[points]]
+conns = 3
+[[points]]
+conns = 2
+[[points]]
+conns = 1

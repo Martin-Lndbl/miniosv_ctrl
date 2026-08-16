@@ -34,6 +34,7 @@
               botocore
               pyyaml
               pandas
+              matplotlib
             ]
           ))
         ];
@@ -44,6 +45,9 @@
             nativeBuildInputs = extraPackages ++ (old.nativeBuildInputs or [ ]);
 
             shellHook = (old.shellHook or "") + ''
+              # competitors/linux-s3 links statically, so it runs on a AL2023 AMI.
+              export GLIBC_STATIC_LIB="${pkgs.glibc.static}/lib"
+
               if [ -f "$PWD/.env" ]; then
                 set -a
                 . "$PWD/.env"
