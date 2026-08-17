@@ -87,8 +87,10 @@ class SmoltcpS3(Bench):
         billing instance."""
         logdir.mkdir(parents=True, exist_ok=True)
         log = logdir / f"deploy-{instance}-{int(time.time())}.log"
+        # Same tag, different owner: report, never touch.
         if up := self.live():
-            raise SystemExit(f"refusing to launch, instance still up: {up}")
+            print(f"    note: {len(up)} other {self.instance_tag} instance(s) "
+                  f"up, not ours: {', '.join(up)}", flush=True)
 
         with log.open("w") as fh:
             p = subprocess.Popen(
@@ -136,8 +138,11 @@ class SmoltcpS3(Bench):
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(os.getpgid(p.pid), 9)
 
-        if stray := self.live():  # a launch interrupted before it logged an id
-            ec2().terminate_instances(InstanceIds=stray)
+        # No tag-wide sweep: the tag does not say who launched it. aws-deploy.py
+        # terminates its own on SIGINT.
+        if iid is None:
+            print("WARN: no instance id in the deploy log — if aws-deploy.py "
+                  "launched one, check for it by hand", flush=True)
 
         text = log.read_text(errors="replace")
         row = parse(text, self.metrics)
