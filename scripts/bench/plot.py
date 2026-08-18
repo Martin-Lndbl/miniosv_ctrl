@@ -47,13 +47,40 @@ LABELS = {
     "conns": "Concurrent connections per worker",
     "workers": "Worker threads (RSS queues)",
     "block": "Block size per request",
+    "instance": "EC2 instance size",
 }
 
-# EC2's sustained allowance: the ceiling the curve is measured against.
-CEILING = {"c6in.8xlarge": 50.0, "c7i.8xlarge": 12.5, "c7i.large": 12.5}
+# EC2's sustained (baseline) allowance in Gbps, from describe-instance-types.
+# Sizes at 4xlarge and below can burst well above this on network credits, so a
+# short run there measures burst, not what the machine sustains.
+CEILING = {
+    "c6in.large": 3.125,
+    "c6in.xlarge": 6.25,
+    "c6in.2xlarge": 12.5,
+    "c6in.4xlarge": 25.0,
+    "c6in.8xlarge": 50.0,
+    "c6in.16xlarge": 100.0,
+    "c7i.8xlarge": 12.5,
+    "c7i.large": 12.5,
+}
 
 
-def tick(axis: str, v: float) -> str:
+def rank(axis: str, v) -> float:
+    """Sort key. Instance sizes sort by machine, not alphabetically, so
+    16xlarge lands after 2xlarge rather than before it."""
+    if axis != "instance":
+        return float(v)
+    size = str(v).rsplit(".", 1)[-1]
+    if size == "large":
+        return 1.0
+    if size == "xlarge":
+        return 2.0
+    return float(size.removesuffix("xlarge")) * 2
+
+
+def tick(axis: str, v) -> str:
+    if axis == "instance":
+        return str(v).split(".", 1)[-1]
     return f"{int(v) >> 20}M" if axis == "block" else f"{int(v):g}"
 
 
@@ -62,7 +89,8 @@ def summarise(df: pd.DataFrame, series_col: str | None):
     keys = ([series_col] if series_col else []) + ["axis_value"]
     g = df[df["valid"]].groupby(keys)["gbps"]
     out = g.agg(mean="mean", lo="min", hi="max", n="count").reset_index()
-    return out.sort_values("axis_value")
+    axis = str(df["axis"].iloc[0])
+    return out.sort_values("axis_value", key=lambda c: c.map(lambda v: rank(axis, v)))
 
 
 def markdown(rows: list[list[str]], head: list[str]) -> str:
@@ -84,6 +112,12 @@ def plot(
     axis = str(df["axis"].iloc[0])
     instance = str(df["instance"].iloc[0])
     stats = summarise(df, series_col)
+    # Instance sizes are names, not magnitudes: place them evenly and label
+    # them, rather than pretending the gaps mean something.
+    named = axis == "instance"
+    order = sorted(stats["axis_value"].unique(), key=lambda v: rank(axis, v))
+    at = {v: i for i, v in enumerate(order)}
+    xof = (lambda col: col.map(at)) if named else (lambda col: col)
     groups = (
         [(k, g) for k, g in stats.groupby(series_col)]
         if series_col
@@ -94,28 +128,45 @@ def plot(
     fig.patch.set_facecolor(c["surface"])
     ax.set_facecolor(c["surface"])
 
-    ceiling = CEILING.get(instance)
-    if ceiling:
-        # A threshold, so dashing carries meaning rather than noise.
-        ax.axhline(ceiling, color=c["muted"], lw=1, ls=(0, (5, 4)), zorder=1)
-        ax.annotate(
-            f"{instance} sustained, {ceiling:g} Gbps",
-            (0.995, ceiling),
-            xycoords=ax.get_yaxis_transform(),
-            textcoords="offset points",
-            xytext=(0, 5),
-            ha="right",
-            fontsize=8,
-            color=c["muted"],
-        )
+    if named:
+        # Every point has its own allowance, so the ceiling is a line, not a
+        # level. Dashed because it is a threshold rather than measured data.
+        ceilings = [CEILING.get(v) for v in order]
+        ceiling = max([x for x in ceilings if x], default=0) or None
+        if any(ceilings):
+            ax.plot(
+                range(len(order)),
+                ceilings,
+                color=c["muted"],
+                lw=1,
+                ls=(0, (5, 4)),
+                marker="",
+                zorder=1,
+                label="EC2 sustained allowance",
+            )
+    else:
+        ceiling = CEILING.get(instance)
+        if ceiling:
+            # A threshold, so dashing carries meaning rather than noise.
+            ax.axhline(ceiling, color=c["muted"], lw=1, ls=(0, (5, 4)), zorder=1)
+            ax.annotate(
+                f"{instance} sustained, {ceiling:g} Gbps",
+                (0.995, ceiling),
+                xycoords=ax.get_yaxis_transform(),
+                textcoords="offset points",
+                xytext=(0, 5),
+                ha="right",
+                fontsize=8,
+                color=c["muted"],
+            )
 
     for i, (name, g) in enumerate(groups):
         col = c["series"][i % len(c["series"])]
         ax.fill_between(
-            g["axis_value"], g["lo"], g["hi"], color=col, alpha=0.18, lw=0, zorder=2
+            xof(g["axis_value"]), g["lo"], g["hi"], color=col, alpha=0.18, lw=0, zorder=2
         )
         ax.plot(
-            g["axis_value"],
+            xof(g["axis_value"]),
             g["mean"],
             color=col,
             lw=2,
@@ -130,7 +181,7 @@ def plot(
     bad = df[~df["valid"]]
     if len(bad):
         ax.scatter(
-            bad["axis_value"],
+            xof(bad["axis_value"]),
             bad["gbps"],
             marker="x",
             s=55,
@@ -152,7 +203,7 @@ def plot(
     best = stats.loc[stats["mean"].idxmax()]
     ax.annotate(
         f"{best['mean']:.1f} Gbps",
-        (best["axis_value"], best["mean"]),
+        (at[best["axis_value"]] if named else best["axis_value"], best["mean"]),
         textcoords="offset points",
         xytext=(0, 11),
         ha="center",
@@ -161,10 +212,11 @@ def plot(
         fontweight="medium",
     )
 
-    ax.set_xscale("log", base=2)
-    xs = sorted(stats["axis_value"].unique())
+    if not named:
+        ax.set_xscale("log", base=2)
+    xs = list(range(len(order))) if named else order
     ax.set_xticks(xs)
-    ax.set_xticklabels([tick(axis, v) for v in xs], fontsize=9)
+    ax.set_xticklabels([tick(axis, v) for v in order], fontsize=9)
     ax.minorticks_off()
     ax.margins(x=0.06)  # room for the end labels
     # Anchored at zero: cropping a magnitude's baseline exaggerates slope.
@@ -186,7 +238,8 @@ def plot(
     ax.text(
         0,
         1.02,
-        f"{instance} · {fixed} · mean of {reps} runs, band is min–max",
+        (f"{fixed} · mean of {reps} runs, band is min–max" if named
+         else f"{instance} · {fixed} · mean of {reps} runs, band is min–max"),
         transform=ax.transAxes,
         fontsize=8.5,
         color=c["muted"],
@@ -200,7 +253,7 @@ def plot(
         ax.spines[side].set_color(c["axis"])
         ax.spines[side].set_linewidth(0.8)
     ax.tick_params(colors=c["muted"], labelsize=9, length=0)
-    if series_col or len(bad):
+    if series_col or len(bad) or named:
         ax.legend(frameon=False, fontsize=9, labelcolor=c["text"])
 
     fig.tight_layout()

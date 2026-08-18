@@ -106,6 +106,10 @@ def main() -> int:
 
     for i, point in enumerate(points):
         cfg = {**fixed, **point}
+        # `instance` is a runner parameter, not a knob: pass the point's own
+        # machine when the axis is something else, and let --sweep carry it when
+        # it is the axis.
+        instance = str(cfg.pop("instance", x["instance"])) if axis != "instance" else x["instance"]
         held = [s for k, v in cfg.items() if k != axis for s in (f"--{k}", str(v))]
         cmd = [
             sys.executable,
@@ -115,7 +119,7 @@ def main() -> int:
             "--reps",
             str(x["reps"]),
             "--instance",
-            x["instance"],
+            instance,
             "--cooldown",
             str(cooldown),
             "--max-vm-seconds",
@@ -126,6 +130,10 @@ def main() -> int:
             str(out),
             *held,
         ]
+        # On the Linux baseline most points are allowance-shaped, which is the
+        # result, not a defect that makes the rest of the queue pointless.
+        if x.get("keep_going"):
+            cmd.append("--keep-going")
         if a.dry_run:
             cmd.append("--dry-run")
 

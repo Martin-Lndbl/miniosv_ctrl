@@ -15,6 +15,9 @@ import boto3
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
+# Sweepable, but a runner parameter rather than a compiled-in knob: the image is
+# identical at every point, only the machine it is deployed to changes.
+INSTANCE_AXIS = "instance"
 # Connection setup on an unloaded path, ms/conn.
 SETUP_BASELINE_MS = 2.6
 
@@ -182,11 +185,16 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     out = a.out or ROOT / f"results/{bench.name}/sweep.csv"
 
     axis, _, raw = a.sweep.partition("=")
-    if axis not in bench.knobs or not raw:
+    if not raw:
+        raise SystemExit("--sweep needs values, e.g. conns=1,2,4")
+    if axis == INSTANCE_AXIS:
+        values = [v.strip() for v in raw.split(",") if v.strip()]
+    elif axis in bench.knobs:
+        values = [bench.knobs[axis][1](v) for v in raw.split(",")]
+    else:
         raise SystemExit(
-            f"--sweep must be one of {list(bench.knobs)}, e.g. conns=1,2,4"
+            f"--sweep must be {INSTANCE_AXIS} or one of {list(bench.knobs)}"
         )
-    values = [bench.knobs[axis][1](v) for v in raw.split(",")]
 
     base = {}
     for knob, (_env, parser) in bench.knobs.items():
@@ -211,14 +219,16 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         return n / (1 << 30)
 
     print(
-        f"bench    : {bench.name}\ninstance : {a.instance}"
+        f"bench    : {bench.name}"
+        f"\ninstance : {'swept' if axis == INSTANCE_AXIS else a.instance}"
         f"\nvm cap   : {a.max_vm_seconds}s per run"
         f"\ncooldown : {a.cooldown}s between runs"
         f"\naxis     : {axis} = {values}"
         f"\norder    : {'interleaved (rep-major)' if a.interleave else 'value-major'}"
         f"\nfixed    : {({k: v for k, v in base.items() if k != axis})}"
         f"\nruns     : {len(plan)} ({len(values)} builds x {a.reps} reps)"
-        f"\ntransfer : {sum(gib(v) for v, _ in plan):.1f} GiB total\nout      : {out}"
+        f"\ntransfer : up to {sum(gib(v) for v, _ in plan):.1f} GiB"
+        f"\nout      : {out}"
     )
     if a.dry_run:
         for v, r in plan:
@@ -235,7 +245,10 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     built = None
     ran_one = False
     for idx, (value, rep) in enumerate(plan):
-        cfg = {**base, axis: value}
+        # Sweeping instances leaves the build alone; every other axis rebuilds.
+        on_instances = axis == INSTANCE_AXIS
+        instance = value if on_instances else a.instance
+        cfg = dict(base) if on_instances else {**base, axis: value}
         if (
             not df.empty
             and (
@@ -256,10 +269,10 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
 
         print(f"--- {axis}={value} rep={rep} ---", flush=True)
         ran_one = True
-        row = bench.run_once(a.instance, out.parent / "logs", cfg, ip)
+        row = bench.run_once(instance, out.parent / "logs", cfg, ip)
         row |= {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "instance": a.instance,
+            "instance": instance,
             "axis": axis,
             "axis_value": value,
             "rep": rep,
@@ -306,7 +319,8 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     ran = df[df["axis"] == axis] if "axis" in df else df
     good = ran[ran["valid"] == True] if "valid" in ran else ran  # noqa: E712
     best = f"{good['gbps'].max():.1f}" if len(good) else "n/a"
-    print(f"\n{len(ran)} runs on {a.instance}, {len(good)} valid, best {best} Gbps")
+    where = ", ".join(values) if axis == INSTANCE_AXIS else a.instance
+    print(f"\n{len(ran)} runs on {where}, {len(good)} valid, best {best} Gbps")
     print(f"wrote {out} ({len(df)} rows)")
     return 0
 
