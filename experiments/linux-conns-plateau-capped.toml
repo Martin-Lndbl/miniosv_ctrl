@@ -1,0 +1,47 @@
+name = "linux-conns-plateau-capped"
+title = "Linux (capped): GET throughput vs concurrent connections per worker"
+description = "The unikernel's 8-core budget with every Linux feature kept — jumbo, GRO, delayed ACK, autotuning. Matches resources, not functionality."
+
+bench    = "competitors/linux-s3"
+instance = "c6in.8xlarge"
+axis     = "conns"
+reps     = 3
+cooldown = 120
+max_vm_seconds = 900
+out      = "results/linux-s3/conns-capped.csv"
+keep_going = true       # an allowance-shaped point is a result, not a stop
+
+# Resolved once for the whole experiment; S3 front-ends differ ~1.7x.
+target_ip = ""
+
+[fixed]
+mode = "capped"
+workers = 8
+block   = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+
+[[points]]
+conns = 48
+[[points]]
+conns = 32
+[[points]]
+conns = 24
+[[points]]
+conns = 16
+[[points]]
+conns = 12
+[[points]]
+conns = 8
+[[points]]
+conns = 6
+[[points]]
+conns = 4
+[[points]]
+conns = 3
+[[points]]
+conns = 2
+[[points]]
+conns = 1
