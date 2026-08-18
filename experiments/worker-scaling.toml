@@ -6,8 +6,8 @@ bench    = "apps/bench/smoltcp-s3"
 instance = "c6in.8xlarge"
 axis     = "workers"
 reps     = 3
-cooldown = 120
-max_vm_seconds = 300    # one worker moves the whole transfer; 110 is too tight
+cooldown = 180
+max_vm_seconds = 110    # measured: 1 worker moves 16 GiB in ~28 s
 out      = "results/smoltcp-s3/sweep-workers.csv"
 
 # Blank resolves once for the whole experiment. S3 front-ends do not perform
@@ -22,7 +22,9 @@ block = "128M"
 BENCH_TLS_STUB  = "0"
 AWS_BUCKET_SIZE = "10G"
 
-# conns = 128 / workers, so total connections stay at 128 throughout.
+# conns = 128 / workers, so total connections stay at 128 throughout. The axis
+# stops at 8 because c6in.8xlarge advertises 8 RSS queues; asking for more just
+# clamps and produces duplicate points.
 [[points]]
 workers = 1
 conns   = 128
@@ -35,9 +37,3 @@ conns   = 32
 [[points]]
 workers = 8
 conns   = 16
-[[points]]
-workers = 16
-conns   = 8
-[[points]]
-workers = 32
-conns   = 4
