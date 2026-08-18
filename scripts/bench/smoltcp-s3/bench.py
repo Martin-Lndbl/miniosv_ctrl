@@ -43,6 +43,9 @@ class SmoltcpS3(Bench):
     # field -> (pattern, cast), applied to the guest's log.
     metrics = {
         "workers_actual": (r"^rss: (\d+) queues", int),
+        # Read from the guest: a stubbed run discards ciphertext instead of
+        # decrypting it, and is not the same experiment.
+        "tls_stub": (r"^bench:.*tls_stub=(\w+)", lambda v: v == "true"),
         "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
         "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
         "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
