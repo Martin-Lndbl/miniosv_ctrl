@@ -1,0 +1,167 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# The root .env, shared with apps/bench/smoltcp-s3: the anchor is only valid if
+# both stacks use the same bucket, region, blob size and BENCH_* shape.
+env_file := parent_directory(parent_directory(justfile_directory())) / ".env"
+
+# Where the static binary lands in the bucket; instance.py fetches it unsigned.
+bin_key := "bin/linux-s3"
+
+# List available recipes
+default:
+    @just --list
+
+# Build the static binary and upload it; extends the bucket policy to allow it
+setup: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    env_file="{{ env_file }}"
+    if [ ! -f "$env_file" ]; then
+        echo "no $env_file — run 'just setup apps/bench/smoltcp-s3' first." >&2
+        echo "That recipe owns the bucket, the blob and the shape; this one only" >&2
+        echo "adds a second binary to the same bucket." >&2
+        exit 1
+    fi
+    set -a; . "$env_file"; set +a
+
+    for req in AWS_BUCKET AWS_REGION AWS_SUBNET AWS_BUCKET_SIZE \
+               BENCH_WORKERS BENCH_CONNS_PER_WORKER BENCH_BLOCK_SIZE; do
+        if [ -z "${!req:-}" ]; then
+            echo "$req missing from $env_file — re-run 'just setup apps/bench/smoltcp-s3'" >&2
+            exit 1
+        fi
+    done
+
+    if ! aws sts get-caller-identity >/dev/null 2>&1; then
+        echo "not logged in to aws — running 'aws login --remote'"
+        aws login --remote
+    fi
+
+    # Caught here rather than by a boot that dies. 4 MiB/conn matches the
+    # smoltcp rx ring, which the parity run's SO_RCVBUF mirrors.
+    python3 - "$BENCH_WORKERS" "$BENCH_CONNS_PER_WORKER" <<'PY'
+    import sys
+    w, c = int(sys.argv[1]), int(sys.argv[2])
+    mib = w * c * 4
+    print(f"shape        : {w} workers x {c} conns = {w*c} connections")
+    print(f"rx buffers   : {w*c} x 4 MiB = {mib} MiB ({mib/1024:.2f} GiB) in the parity run")
+    if mib > 32 * 1024:
+        sys.exit(f"refusing: {mib} MiB of receive buffers needs more than 32 GiB")
+    PY
+
+    echo "uploading $(stat -c %s target/x86_64-unknown-linux-gnu/release/linux-s3) bytes to s3://$AWS_BUCKET/{{ bin_key }}"
+    aws s3 cp target/x86_64-unknown-linux-gnu/release/linux-s3 \
+        "s3://$AWS_BUCKET/{{ bin_key }}" --only-show-errors
+
+    just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" _policy add
+
+# Add or remove this bench's bucket-policy statements, preserving every other one
+_policy action:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    env_file="{{ env_file }}"
+    set -a; . "$env_file"; set +a
+
+    vpce=$(aws ec2 describe-vpc-endpoints \
+        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
+                  "Name=vpc-endpoint-type,Values=Gateway" \
+        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
+    if [ -z "$vpce" ] || [ "$vpce" = "None" ]; then
+        echo "no S3 gateway endpoint in $AWS_REGION — run 'just setup apps/bench/smoltcp-s3'" >&2
+        exit 1
+    fi
+
+    current=$(aws s3api get-bucket-policy --bucket "$AWS_BUCKET" \
+        --query Policy --output text 2>/dev/null || echo '')
+
+    # Merged by Sid; the bench's setup now does the same, so neither can
+    # clobber the other whichever order they run in (docs §9.8).
+    python3 - "$AWS_BUCKET" "$vpce" "{{ action }}" "$current" <<'PY' >/tmp/linux-s3-policy.json
+    import json, sys
+    bucket, vpce, action, current = sys.argv[1:5]
+    # Read-only: the run log goes to the console, so nothing needs write.
+    ours = {
+        "BenchBinFromVpce": {
+            "Sid": "BenchBinFromVpce", "Effect": "Allow", "Principal": "*",
+            "Action": "s3:GetObject",
+            "Resource": f"arn:aws:s3:::{bucket}/bin/*",
+            "Condition": {"StringEquals": {"aws:sourceVpce": vpce}},
+        },
+    }
+    doc = json.loads(current) if current.strip() else {"Version": "2012-10-17", "Statement": []}
+    kept = [s for s in doc.get("Statement", []) if s.get("Sid") not in ours]
+    doc["Statement"] = kept + (list(ours.values()) if action == "add" else [])
+    if not doc["Statement"]:
+        print("")          # an empty policy is deleted, not put
+    else:
+        print(json.dumps(doc))
+    PY
+
+    if [ -s /tmp/linux-s3-policy.json ] && [ "$(tr -d '[:space:]' </tmp/linux-s3-policy.json)" != "" ]; then
+        aws s3api put-bucket-policy --bucket "$AWS_BUCKET" \
+            --policy "file:///tmp/linux-s3-policy.json"
+        echo "bucket policy: {{ action }}ed BenchBinFromVpce for $vpce"
+    else
+        aws s3api delete-bucket-policy --bucket "$AWS_BUCKET"
+        echo "bucket policy: removed (no statements left)"
+    fi
+    rm -f /tmp/linux-s3-policy.json
+
+# Build the static binary only
+build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Static so one binary runs on a stock AL2023 AMI. --target is not
+    # redundant: without it these RUSTFLAGS also hit build scripts, which are
+    # host binaries and fail to link statically. Safe only because this bench
+    # never calls getaddrinfo/NSS — the target address is passed in.
+    : "${GLIBC_STATIC_LIB:?not in the devshell — run 'nix develop .#rust' first}"
+    RUSTFLAGS="-C target-feature=+crt-static -L native=$GLIBC_STATIC_LIB" \
+        cargo build --release --target x86_64-unknown-linux-gnu
+    out=target/x86_64-unknown-linux-gnu/release/linux-s3
+    file "$out" | grep -q 'static-pie' \
+        || { echo "not statically linked: $(file "$out")" >&2; exit 1; }
+    echo "built $out ($(stat -c %s "$out") bytes, static-pie)"
+
+# Remove this bench's objects, policy statements and instances ('force' skips the prompt)
+clean *force:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    env_file="{{ env_file }}"
+    if [ ! -f "$env_file" ]; then echo "nothing to clean up"; exit 0; fi
+    set -a; . "$env_file"; set +a
+
+    # Never touches the bucket or the blob — 'just clean
+    # apps/bench/smoltcp-s3' owns those.
+    echo "about to delete:"
+    echo "  s3://$AWS_BUCKET/bin/*"
+    echo "  bucket policy statement BenchBinFromVpce"
+    echo "  any running instance tagged bench=linux-s3"
+    echo "(the bucket and blob.bin are left alone)"
+
+    if [ "{{ force }}" != "force" ]; then
+        if [ -t 0 ]; then
+            read -r -p "proceed? [y/N]: " answer || true
+            [ "${answer:-}" = "y" ] || { echo "aborted" >&2; exit 1; }
+        else
+            echo "refusing without a tty — use 'just clean competitors/linux-s3 force'" >&2
+            exit 1
+        fi
+    fi
+
+    aws s3 rm "s3://$AWS_BUCKET/bin/" --recursive --only-show-errors || true
+
+
+    just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" _policy remove || true
+
+    ids=$(aws ec2 describe-instances \
+        --filters "Name=tag:bench,Values=linux-s3" \
+                  "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+        --query "Reservations[].Instances[].InstanceId" --output text)
+    if [ -n "$ids" ]; then
+        echo "terminating: $ids"
+        aws ec2 terminate-instances --instance-ids $ids --output text >/dev/null
+    else
+        echo "no instances tagged bench=linux-s3"
+    fi

@@ -1,0 +1,37 @@
+name = "linux-worker-scaling-stock"
+title = "Linux (stock): GET throughput vs worker threads at constant offered load"
+description = "As-shipped AL2023, conns = 128/workers. Kernel TCP scales past the ENA's 8 queues, so 16 and 32 have no unikernel counterpart."
+
+bench    = "competitors/linux-s3"
+instance = "c6in.8xlarge"
+axis     = "workers"
+reps     = 3
+cooldown = 120
+max_vm_seconds = 900
+out      = "results/linux-s3/workers-stock.csv"
+keep_going = true       # an allowance-shaped point is a result, not a stop
+
+# Resolved once for the whole experiment; S3 front-ends differ ~1.7x.
+target_ip = ""
+
+[fixed]
+mode = "stock"
+block = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+
+# conns = 128/workers, so total connections stay at 128.
+[[points]]
+workers = 1
+conns   = 128
+[[points]]
+workers = 2
+conns   = 64
+[[points]]
+workers = 4
+conns   = 32
+[[points]]
+workers = 8
+conns   = 16

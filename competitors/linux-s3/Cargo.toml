@@ -1,0 +1,37 @@
+[package]
+name = "linux-s3"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "linux-s3"
+path = "src/main.rs"
+
+[profile.release]
+panic = "abort"     # the bench does too; unwinding is a different failure path
+
+# Byte-identical to apps/bench/smoltcp-s3/Cargo.toml minus smoltcp, with
+# Cargo.lock COPIED from there: the same constraints resolved fresh today give
+# rustls 0.23.43 / pki-types 1.15.1 / webpki 0.103.14 / roots 1.0.9 against the
+# lock's 0.23.41 / 1.15.0 / 0.103.13 / 1.0.8.
+#
+# `default-features = false` is not just size: it keeps rustls off its std
+# paths, so this drives the same state machine as the no_std bench.
+[dependencies.rustls]
+version = "0.23"
+default-features = false
+features = ["tls12"]
+
+[dependencies.rustls-rustcrypto]
+version = "0.0.2-alpha"
+default-features = false
+features = ["alloc", "tls12"]
+
+[dependencies.webpki-roots]
+version = "0.26"
+
+# Not in the bench's dep set and cannot be: the parity knobs are
+# setsockopt/sched_setaffinity calls std does not expose. Confined to
+# src/tune.rs.
+[dependencies.libc]
+version = "0.2"
