@@ -23,25 +23,32 @@ import pandas as pd  # noqa: E402
 
 # Series slots are assigned in fixed order, never cycled.
 INK = {
-    "light": dict(
-        surface="#fcfcfb",
-        text="#0b0b0b",
-        muted="#898781",
-        grid="#e1e0d9",
-        axis="#c3c2b7",
-        bad="#d03b3b",
-        series=["#2a78d6", "#eb6834", "#1baf7a"],
-    ),
-    "dark": dict(
-        surface="#1a1a19",
-        text="#ffffff",
-        muted="#898781",
-        grid="#2c2c2a",
-        axis="#383835",
-        bad="#d03b3b",
-        series=["#3987e5", "#d95926", "#199e70"],
-    ),
+    "light": dict(surface="#fcfcfb", text="#0b0b0b", muted="#898781",
+                  grid="#e1e0d9", axis="#c3c2b7", bad="#d03b3b",
+                  series=["#2a78d6", "#eb6834", "#1baf7a"]),
+    "dark": dict(surface="#1a1a19", text="#ffffff", muted="#898781",
+                 grid="#2c2c2a", axis="#383835", bad="#d03b3b",
+                 series=["#3987e5", "#d95926", "#199e70"]),
 }
+
+
+def rc(c: dict) -> dict:
+    """The chrome, as rcParams rather than a call per element."""
+    return {
+        "figure.facecolor": c["surface"], "savefig.facecolor": c["surface"],
+        "axes.facecolor": c["surface"], "axes.edgecolor": c["axis"],
+        "axes.linewidth": 0.8, "axes.labelcolor": c["text"],
+        "axes.labelsize": 9.5, "axes.titlesize": 12, "axes.titlecolor": c["text"],
+        "axes.titlelocation": "left", "axes.titlepad": 16,
+        "axes.spines.top": False, "axes.spines.right": False,
+        "axes.grid": True, "axes.grid.axis": "y", "axes.axisbelow": True,
+        "grid.color": c["grid"], "grid.linewidth": 0.8,
+        "text.color": c["text"], "font.size": 9,
+        "xtick.color": c["muted"], "ytick.color": c["muted"],
+        "xtick.labelsize": 9, "ytick.labelsize": 9,
+        "xtick.major.size": 0, "ytick.major.size": 0,
+        "legend.frameon": False, "legend.fontsize": 9,
+    }
 
 LABELS = {
     "conns": "Concurrent connections per worker",
@@ -93,14 +100,6 @@ def summarise(df: pd.DataFrame, series_col: str | None):
     return out.sort_values("axis_value", key=lambda c: c.map(lambda v: rank(axis, v)))
 
 
-def markdown(rows: list[list[str]], head: list[str]) -> str:
-    w = [max(len(r[i]) for r in [head, *rows]) for i in range(len(head))]
-    line = lambda r: "| " + " | ".join(v.ljust(w[i]) for i, v in enumerate(r)) + " |"
-    return "\n".join(
-        [line(head), "|" + "|".join("-" * (n + 2) for n in w) + "|", *map(line, rows)]
-    )
-
-
 def plot(
     df: pd.DataFrame,
     out: Path,
@@ -124,9 +123,8 @@ def plot(
         else [(None, stats)]
     )
 
+    plt.rcParams.update(rc(c))
     fig, ax = plt.subplots(figsize=(8, 4.8), dpi=160)
-    fig.patch.set_facecolor(c["surface"])
-    ax.set_facecolor(c["surface"])
 
     if named:
         # Every point has its own allowance, so the ceiling is a line, not a
@@ -207,8 +205,6 @@ def plot(
         textcoords="offset points",
         xytext=(0, 11),
         ha="center",
-        fontsize=9,
-        color=c["text"],
         fontweight="medium",
     )
 
@@ -216,25 +212,19 @@ def plot(
         ax.set_xscale("log", base=2)
     xs = list(range(len(order))) if named else order
     ax.set_xticks(xs)
-    ax.set_xticklabels([tick(axis, v) for v in order], fontsize=9)
+    ax.set_xticklabels([tick(axis, v) for v in order])
     ax.minorticks_off()
     ax.margins(x=0.06)  # room for the end labels
     # Anchored at zero: cropping a magnitude's baseline exaggerates slope.
     ax.set_ylim(0, max(ceiling or 0, stats["hi"].max()) * 1.12)
 
-    ax.set_xlabel(LABELS.get(axis, axis), fontsize=9.5, color=c["text"])
-    ax.set_ylabel("Throughput (Gbps)", fontsize=9.5, color=c["text"])
+    ax.set_xlabel(LABELS.get(axis, axis))
+    ax.set_ylabel("Throughput (Gbps)")
     reps = int(stats["n"].max())
     fixed = ", ".join(
         f"{k}={tick(k, df[k].iloc[0])}" for k in LABELS if k in df and k != axis
     )
-    ax.set_title(
-        title or f"smoltcp-s3 GET throughput vs {axis}",
-        fontsize=12,
-        color=c["text"],
-        loc="left",
-        pad=16,
-    )
+    ax.set_title(title or f"GET throughput vs {axis}")
     ax.text(
         0,
         1.02,
@@ -245,42 +235,22 @@ def plot(
         color=c["muted"],
     )
 
-    ax.grid(axis="y", color=c["grid"], lw=0.8, zorder=0)
-    ax.set_axisbelow(True)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(c["axis"])
-        ax.spines[side].set_linewidth(0.8)
-    ax.tick_params(colors=c["muted"], labelsize=9, length=0)
     if series_col or len(bad) or named:
-        ax.legend(frameon=False, fontsize=9, labelcolor=c["text"])
+        ax.legend(labelcolor=c["text"])
 
     fig.tight_layout()
-    fig.savefig(out, facecolor=c["surface"])
+    fig.savefig(out)
     plt.close(fig)
 
     md = out.with_suffix(".md")
-    head = ([series_col] if series_col else []) + [
-        axis,
-        "mean Gbps",
-        "min",
-        "max",
-        "runs",
-    ]
-    rows = [
-        ([str(r[series_col])] if series_col else [])
-        + [
-            tick(axis, r["axis_value"]),
-            f"{r['mean']:.3f}",
-            f"{r['lo']:.3f}",
-            f"{r['hi']:.3f}",
-            str(int(r["n"])),
-        ]
-        for _, r in stats.iterrows()
-    ]
+    table = stats.assign(**{axis: stats["axis_value"].map(lambda v: tick(axis, v))})
+    cols = ([series_col] if series_col else []) + [axis, "mean", "lo", "hi", "n"]
     md.write_text(
-        f"# {axis} sweep — {instance}\n\n{fixed}\n\n" f"{markdown(rows, head)}\n"
+        f"# {axis} sweep — {instance}\n\n{fixed}\n\n"
+        + table[cols].rename(columns={"mean": "mean Gbps", "lo": "min", "hi": "max",
+                                      "n": "runs"})
+        .to_markdown(index=False, floatfmt=".3f")
+        + "\n"
     )
     return md
 

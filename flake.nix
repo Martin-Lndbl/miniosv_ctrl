@@ -35,6 +35,7 @@
               pyyaml
               pandas
               matplotlib
+              tabulate
             ]
           ))
         ];
