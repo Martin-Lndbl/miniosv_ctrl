@@ -86,7 +86,8 @@ def parse(text: str, metrics: dict) -> dict:
 class Bench:
     """Per-bench behaviour; subclasses implement `build` and `run_once`."""
 
-    name: str = ""
+    name: str = ""  # the stack, e.g. smoltcp-s3
+    os_name: str = ""  # the OS results/ groups by, e.g. miniosv
     knobs: dict = {}  # knob -> (env var, value parser)
     defaults: dict = {}  # knob -> value when neither axis nor CLI
     metrics: dict = {}  # field -> (regex, cast), applied to the log
@@ -182,7 +183,6 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     bench.max_vm_seconds = a.max_vm_seconds
-    out = a.out or ROOT / f"results/{bench.name}/sweep.csv"
 
     axis, _, raw = a.sweep.partition("=")
     if not raw:
@@ -195,6 +195,11 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         raise SystemExit(
             f"--sweep must be {INSTANCE_AXIS} or one of {list(bench.knobs)}"
         )
+
+    # Same tree as the experiments: results/<axis>/<os>/. The transport is in
+    # the name because http and https rows are not comparable.
+    transport = "http" if os.environ.get("BENCH_SCHEME") == "http" else "tls"
+    out = a.out or ROOT / f"results/{axis}/{bench.os_name}/adhoc-{transport}.csv"
 
     base = {}
     for knob, (_env, parser) in bench.knobs.items():

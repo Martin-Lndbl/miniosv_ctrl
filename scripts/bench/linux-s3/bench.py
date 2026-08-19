@@ -38,6 +38,7 @@ USER_DATA_MAX = 16 * 1024
 
 class LinuxS3(Bench):
     name = "linux-s3"
+    os_name = "linux"
     knobs = {
         "workers": ("BENCH_WORKERS", size),
         "conns": ("BENCH_CONNS_PER_WORKER", size),

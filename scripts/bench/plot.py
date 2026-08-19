@@ -292,8 +292,10 @@ def main() -> int:
     ap.add_argument(
         "csv",
         type=Path,
+        nargs="+",
         help="path to a sweep CSV, or a bench name whose "
-        "results/<name>/sweep.csv is used",
+        "results/<name>/sweep.csv is used. Several are concatenated, so two "
+        "stacks' sweeps overlay in one figure with --series note",
     )
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--dark", action="store_true")
@@ -303,19 +305,17 @@ def main() -> int:
     ap.add_argument("--title", default=None)
     a = ap.parse_args()
 
-    csv = (
-        a.csv
-        if a.csv.is_file()
-        else (
-            Path(__file__).resolve().parents[2] / "results" / a.csv.name / "sweep.csv"
-        )
-    )
-    if not csv.is_file():
-        raise SystemExit(f"no such sweep CSV: {a.csv}")
-    a.csv = csv
-    df = pd.read_csv(csv)
+    root = Path(__file__).resolve().parents[2]
+    csvs = []
+    for p in a.csv:
+        csv = p if p.is_file() else root / "results" / p.name / "sweep.csv"
+        if not csv.is_file():
+            raise SystemExit(f"no such sweep CSV: {p}")
+        csvs.append(csv)
+    a.csv = csvs[0]
+    df = pd.concat([pd.read_csv(c) for c in csvs], ignore_index=True)
     if df.empty:
-        raise SystemExit(f"{csv} has no rows")
+        raise SystemExit(f"{csvs[0]} has no rows")
     mode = "dark" if a.dark else "light"
     out = a.out or a.csv.with_name(f"{a.csv.stem}{'-dark' if a.dark else ''}.png")
     md = plot(df, out, mode, a.series, a.title)

@@ -1,4 +1,4 @@
-name = "linux-worker-scaling-stock"
+name = "linux-tls-stock"
 title = "Linux (stock): GET throughput vs worker threads at constant offered load"
 description = "As-shipped AL2023, conns = 128/workers. Kernel TCP scales past the ENA's 8 queues, so 16 and 32 have no unikernel counterpart."
 
@@ -8,7 +8,7 @@ axis     = "workers"
 reps     = 3
 cooldown = 120
 max_vm_seconds = 900
-out      = "results/linux-s3/workers-stock.csv"
+out      = "results/workers/linux/tls-stock.csv"
 keep_going = true       # an allowance-shaped point is a result, not a stop
 
 # Resolved once for the whole experiment; S3 front-ends differ ~1.7x.

@@ -37,10 +37,11 @@ reproduce name *args:
     nix develop "{{ justfile_directory() }}#rust" --command python3 \
         "{{ justfile_directory() }}/scripts/bench/experiment.py" "$@"
 
-# List stored experiments
+# List stored experiments, grouped by the question they answer
 experiments:
-    @grep -H '^title' "{{ justfile_directory() }}"/experiments/*.toml \
-        | sed 's|.*/||; s|\.toml:title *= *"| — |; s|"$||'
+    @find "{{ justfile_directory() }}/experiments" -name '*.toml' | sort \
+        | xargs grep -H '^title' \
+        | sed 's|.*/experiments/||; s|\.toml:title *= *"| — |; s|"$||'
 
 # Plot a sweep, e.g. 'just plot smoltcp-s3' or 'just plot results/x/sweep-workers.csv'
 plot csv *args:

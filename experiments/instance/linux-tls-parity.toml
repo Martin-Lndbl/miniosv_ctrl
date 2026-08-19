@@ -1,4 +1,4 @@
-name = "linux-instance-scaling-parity"
+name = "linux-tls-parity"
 title = "Linux (parity): GET throughput vs EC2 instance size"
 description = "How far does the Linux baseline ride the machine it is given?"
 
@@ -8,7 +8,7 @@ axis     = "instance"
 reps     = 3
 cooldown = 180
 max_vm_seconds = 900
-out      = "results/linux-s3/sweep-instance-parity.csv"
+out      = "results/instance/linux/tls-parity.csv"
 keep_going = true       # an allowance-shaped point is a result, not a stop
 
 # Blank resolves once for the whole experiment. S3 front-ends do not perform

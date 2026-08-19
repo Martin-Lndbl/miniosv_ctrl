@@ -30,6 +30,7 @@ BENCH = "apps/bench/smoltcp-s3"
 
 class SmoltcpS3(Bench):
     name = "smoltcp-s3"
+    os_name = "miniosv"
     knobs = {
         "workers": ("BENCH_WORKERS", size),
         "conns": ("BENCH_CONNS_PER_WORKER", size),

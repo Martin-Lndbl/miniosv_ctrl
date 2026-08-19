@@ -1,4 +1,4 @@
-name = "instance-scaling"
+name = "miniosv-tls"
 title = "GET throughput vs EC2 instance size, at each machine's queue count"
 description = "How far does the stack ride the machine it is given?"
 
@@ -8,7 +8,7 @@ axis     = "instance"
 reps     = 3
 cooldown = 180
 max_vm_seconds = 180
-out      = "results/smoltcp-s3/sweep-instance.csv"
+out      = "results/instance/miniosv/tls.csv"
 
 target_ip = ""
 

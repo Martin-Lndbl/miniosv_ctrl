@@ -35,12 +35,42 @@ EXPERIMENTS = ROOT / "experiments"
 REQUIRED_ENV = ("AWS_REGION", "AWS_BUCKET", "AWS_SUBNET")
 
 
+def qualified(path: Path) -> str:
+    return str(
+        path.relative_to(EXPERIMENTS).with_suffix("")
+        if path.is_relative_to(EXPERIMENTS)
+        else path
+    )
+
+
+def find(name: str) -> Path:
+    """`workers/smoltcp-http`, a bare `smoltcp-http`, or a path. Stems repeat
+    across axes, so a bare one is an error only when it matches more than one."""
+    for candidate in (Path(name), EXPERIMENTS / f"{name}.toml"):
+        if candidate.is_file():
+            return candidate
+
+    hits = sorted(EXPERIMENTS.rglob(f"{name}.toml"))
+    if len(hits) > 1:
+        where = "\n  ".join(qualified(p) for p in hits)
+        raise SystemExit(f"{name} names {len(hits)} experiments:\n  {where}")
+    if not hits:
+        known = "\n  ".join(qualified(p) for p in sorted(EXPERIMENTS.rglob("*.toml")))
+        raise SystemExit(f"no such experiment: {name}\nhave:\n  {known}")
+    return hits[0]
+
+
 def load(name: str) -> dict:
-    path = Path(name) if Path(name).is_file() else EXPERIMENTS / f"{name}.toml"
-    if not path.is_file():
-        known = ", ".join(sorted(p.stem for p in EXPERIMENTS.glob("*.toml")))
-        raise SystemExit(f"no such experiment: {name} (have: {known})")
-    return tomllib.loads(path.read_text()) | {"path": path}
+    path = find(name)
+    x = tomllib.loads(path.read_text()) | {"path": path}
+    # Misfiled means a sweep writing into another axis's results tree.
+    group = path.parent.name
+    if path.is_relative_to(EXPERIMENTS) and group != x["axis"]:
+        raise SystemExit(
+            f"{qualified(path)} sweeps {x['axis']!r} but sits in {group}/ — "
+            f"move it to experiments/{x['axis']}/ (and its `out` with it)"
+        )
+    return x
 
 
 def main() -> int:
@@ -79,7 +109,8 @@ def main() -> int:
         else x.get("point_cooldown", cooldown)
     )
 
-    print(f"experiment : {x['name']}\n{x['description'].strip()}\n")
+    # Qualified, because the stem alone no longer says which axis this is.
+    print(f"experiment : {qualified(x['path'])}\n{x['description'].strip()}\n")
     print(
         f"instance   : {x['instance']}\naxis       : {axis}"
         f"\npoints     : {len(points)} x {x['reps']} reps"

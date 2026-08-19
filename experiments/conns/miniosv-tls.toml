@@ -1,4 +1,4 @@
-name = "conns-plateau"
+name = "miniosv-tls"
 title = "GET throughput vs concurrent connections per worker"
 description = "Where do more concurrent connections stop increasing throughput?"
 
@@ -8,7 +8,7 @@ axis     = "conns"
 reps     = 3
 cooldown = 180
 max_vm_seconds = 110
-out      = "results/smoltcp-s3/sweep.csv"
+out      = "results/conns/miniosv/tls.csv"
 
 # Blank resolves once for the whole experiment. S3 front-ends do not perform
 # alike: 29-30 Gbps on 3.5.217.210 vs 18 on 16.12.9.50, same configuration. Pin
