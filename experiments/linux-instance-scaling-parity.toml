@@ -1,0 +1,54 @@
+name = "linux-instance-scaling-parity"
+title = "Linux (parity): GET throughput vs EC2 instance size"
+description = "How far does the Linux baseline ride the machine it is given?"
+
+bench    = "competitors/linux-s3"
+instance = "c6in.8xlarge"   # overridden per point; the axis is the machine
+axis     = "instance"
+reps     = 3
+cooldown = 180
+max_vm_seconds = 900
+out      = "results/linux-s3/sweep-instance-parity.csv"
+keep_going = true       # an allowance-shaped point is a result, not a stop
+
+# Blank resolves once for the whole experiment. S3 front-ends do not perform
+# alike: 29-30 Gbps on 3.5.217.210 vs 18 on 16.12.9.50, same configuration. Pin
+# one to repeat against it -- S3 rotates them, so a stale value fails the build.
+target_ip = ""
+
+# Nothing clamps the worker count here, so it cannot be "as many as the NIC
+# offers" the way it is on the unikernel side. Matched per point instead, from
+# the workers_actual the smoltcp run recorded on the same machine -- fill these
+# in after instance-scaling has run, or the two curves are not comparable.
+[fixed]
+conns   = 16
+block   = "128M"
+mode    = "parity"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+
+# Baselines double with vCPU count: 3.125, 6.25, 12.5, 25, 50, 100 Gbps. But
+# 4xlarge and below are burstable -- they can reach 25-50 Gbps on network
+# credits, and a ~30 s run spends its whole life inside that burst window. Those
+# points measure burst, not what the machine sustains; only 8xlarge and
+# 16xlarge are credit-free. Read the small end as an upper bound.
+[[points]]
+instance = "c6in.large"
+workers  = 2            # TODO: set to workers_actual from instance-scaling
+[[points]]
+instance = "c6in.xlarge"
+workers  = 4
+[[points]]
+instance = "c6in.2xlarge"
+workers  = 8
+[[points]]
+instance = "c6in.4xlarge"
+workers  = 8
+[[points]]
+instance = "c6in.8xlarge"
+workers  = 8
+[[points]]
+instance = "c6in.16xlarge"
+workers  = 16
