@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import boto3  # noqa: E402
 import runner  # noqa: E402
-from runner import ROOT, Bench, ec2, parse, size  # noqa: E402
+from runner import COMMON_METRICS, ROOT, Bench, ec2, parse, size  # noqa: E402
 
 BENCH = "competitors/linux-s3"
 SCRIPTS = ROOT / BENCH / "scripts"
@@ -54,32 +54,10 @@ class LinuxS3(Bench):
     default_instance = "c6in.8xlarge"
     max_vm_seconds = 900  # mostly waiting for EC2 to expose the console
 
-    metrics = {
-        # No `rss:` line: this stack does not steer by RSS, and nothing clamps
-        # the worker count, so requested == actual.
+    # Shared lines live in runner.COMMON_METRICS; this stack does not steer by
+    # RSS and nothing clamps its worker count, so requested == actual.
+    metrics = COMMON_METRICS | {
         "workers_actual": (r"^bench: (\d+) workers", int),
-        # Read from the guest: a stubbed run discards ciphertext instead of
-        # decrypting it, and is not the same experiment.
-        "tls_stub": (r"^bench:.*tls_stub=(\w+)", lambda v: v == "true"),
-        # An http row measured no TLS, so it is not comparable to an https one.
-        "scheme": (r"^bench:.*scheme=(\w+)", str),
-        "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
-        "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
-        "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
-        "conns_clean": (r"^connections\s+: (\d+)/", int),
-        "conns_total": (r"^connections\s+: \d+/(\d+)", int),
-        "syn_retries": (r"^syn retries\s+: (\d+)", int),
-        "misrouted": (r"^misrouted rx\s+: (\d+)", int),
-        "setup_ms": (r"^setup\s+: (\d+) ms", int),
-        # setup_ms sums overlapping waits, so it is a marker, not a duration
-        # that can be subtracted from elapsed_s. These are the wall-clock pair.
-        "gbps_transfer": (r"TRANSFER:.*?, ([\d.]+) Gbps", float),
-        "setup_wall_s": (r"TRANSFER:.*?\(setup ([\d.]+) s excluded\)", float),
-        "bytes": (r"\((\d+) bytes\)", int),
-        # Read back from the guest, not from what we asked for. Port is no
-        # longer fixed at 443: http dials 80.
-        "target_ip": (r"^target: ([\d.]+):\d+", str),
-        "target_port": (r"^target: [\d.]+:(\d+)", int),
     }
 
     def __init__(self) -> None:

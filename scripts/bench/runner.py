@@ -60,6 +60,36 @@ def size(text: str) -> int:
     )
 
 
+# Both stacks print the same summary lines on purpose, and one validity gate
+# reads both, so the patterns live here instead of drifting in two drivers.
+# `workers_actual` is not here: the guest reports RSS queues, the baseline
+# reports threads it was asked for.
+COMMON_METRICS = {
+    # Read from the guest: a stubbed run discards ciphertext instead of
+    # decrypting it, and an http row measured no TLS at all. Neither is
+    # comparable to a plain https row.
+    "tls_stub": (r"^bench:.*tls_stub=(\w+)", lambda v: v == "true"),
+    "scheme": (r"^bench:.*scheme=(\w+)", str),
+    "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
+    "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
+    "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
+    "conns_clean": (r"^connections\s+: (\d+)/", int),
+    "conns_total": (r"^connections\s+: \d+/(\d+)", int),
+    "syn_retries": (r"^syn retries\s+: (\d+)", int),
+    "misrouted": (r"^misrouted rx\s+: (\d+)", int),
+    "setup_ms": (r"^setup\s+: (\d+) ms", int),
+    # setup_ms sums overlapping waits, so it is a marker, not a duration that
+    # can be subtracted from elapsed_s. These are the wall-clock pair.
+    "gbps_transfer": (r"TRANSFER:.*?, ([\d.]+) Gbps", float),
+    "setup_wall_s": (r"TRANSFER:.*?\(setup ([\d.]+) s excluded\)", float),
+    "bytes": (r"\((\d+) bytes\)", int),
+    # Read back from the guest, not from what we asked for. The port is not
+    # fixed at 443: http dials 80.
+    "target_ip": (r"^target: ([\d.]+):\d+", str),
+    "target_port": (r"^target: [\d.]+:(\d+)", int),
+}
+
+
 def ec2():
     return boto3.client("ec2", region_name=os.environ["AWS_REGION"])
 
