@@ -91,10 +91,8 @@ class LinuxS3(Bench):
             "--ami", default=None, help="override the AL2023 AMI (the NixOS-image hook)"
         )
 
-    def valid(self, row: dict) -> bool:
-        """Shared gate plus: a non-zero ENA allowance counter means EC2 shaped
-        the run, so it measures the allowance rather than the stack."""
-        return super().valid(row) and not row.get("allowance_exceeded")
+    # No `valid()` override: EC2 shaping is recorded in `allowance_exceeded`,
+    # not disqualifying, and the unikernel side has no counterpart to gate on.
 
     # -- build ---------------------------------------------------------------
 
@@ -214,9 +212,9 @@ class LinuxS3(Bench):
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["instance_id"] = iid
         row["log"] = log.name
-        # instance.py tags allowance counters only when non-zero.
+        # Both spellings: stored logs still say RUN INVALID.
         row["allowance_exceeded"] = len(
-            re.findall(r"allowance_exceeded.*RUN INVALID", text)
+            re.findall(r"allowance_exceeded.*(?:RUN INVALID|EC2 SHAPED)", text)
         )
         return row
 
