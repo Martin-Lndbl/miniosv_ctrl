@@ -56,12 +56,11 @@ setup: build
 
     just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" _policy add
 
-# Add or remove this bench's bucket-policy statements, preserving every other one
+# Add or remove this bench's bucket-policy statement, preserving every other one
 _policy action:
     #!/usr/bin/env bash
     set -euo pipefail
-    env_file="{{ env_file }}"
-    set -a; . "$env_file"; set +a
+    set -a; . "{{ env_file }}"; set +a
 
     vpce=$(aws ec2 describe-vpc-endpoints \
         --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
@@ -72,41 +71,9 @@ _policy action:
         exit 1
     fi
 
-    current=$(aws s3api get-bucket-policy --bucket "$AWS_BUCKET" \
-        --query Policy --output text 2>/dev/null || echo '')
-
-    # Merged by Sid; the bench's setup now does the same, so neither can
-    # clobber the other whichever order they run in (docs §9.8).
-    python3 - "$AWS_BUCKET" "$vpce" "{{ action }}" "$current" <<'PY' >/tmp/linux-s3-policy.json
-    import json, sys
-    bucket, vpce, action, current = sys.argv[1:5]
-    # Read-only: the run log goes to the console, so nothing needs write.
-    ours = {
-        "BenchBinFromVpce": {
-            "Sid": "BenchBinFromVpce", "Effect": "Allow", "Principal": "*",
-            "Action": "s3:GetObject",
-            "Resource": f"arn:aws:s3:::{bucket}/bin/*",
-            "Condition": {"StringEquals": {"aws:sourceVpce": vpce}},
-        },
-    }
-    doc = json.loads(current) if current.strip() else {"Version": "2012-10-17", "Statement": []}
-    kept = [s for s in doc.get("Statement", []) if s.get("Sid") not in ours]
-    doc["Statement"] = kept + (list(ours.values()) if action == "add" else [])
-    if not doc["Statement"]:
-        print("")          # an empty policy is deleted, not put
-    else:
-        print(json.dumps(doc))
-    PY
-
-    if [ -s /tmp/linux-s3-policy.json ] && [ "$(tr -d '[:space:]' </tmp/linux-s3-policy.json)" != "" ]; then
-        aws s3api put-bucket-policy --bucket "$AWS_BUCKET" \
-            --policy "file:///tmp/linux-s3-policy.json"
-        echo "bucket policy: {{ action }}ed BenchBinFromVpce for $vpce"
-    else
-        aws s3api delete-bucket-policy --bucket "$AWS_BUCKET"
-        echo "bucket policy: removed (no statements left)"
-    fi
-    rm -f /tmp/linux-s3-policy.json
+    python3 "{{ justfile_directory() }}/../../scripts/bucket_policy.py" \
+        "{{ action }}" --sid BenchBinFromVpce --vpce "$vpce" \
+        --resource "arn:aws:s3:::$AWS_BUCKET/bin/*"
 
 # Build the static binary only
 build:
