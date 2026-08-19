@@ -47,6 +47,8 @@ class SmoltcpS3(Bench):
         # Read from the guest: a stubbed run discards ciphertext instead of
         # decrypting it, and is not the same experiment.
         "tls_stub": (r"^bench:.*tls_stub=(\w+)", lambda v: v == "true"),
+        # An http row measured no TLS, so it is not comparable to an https one.
+        "scheme": (r"^bench:.*scheme=(\w+)", str),
         "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
         "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
         "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
@@ -62,8 +64,10 @@ class SmoltcpS3(Bench):
         "setup_wall_s": (r"TRANSFER:.*?\(setup ([\d.]+) s excluded\)", float),
         "bytes": (r"\((\d+) bytes\)", int),
         "instance_id": (r"Instance running: (i-[0-9a-f]+)", str),
-        # Read back from the guest, not from what we asked for.
-        "target_ip": (r"^target: ([\d.]+):443", str),
+        # Read back from the guest, not from what we asked for. Port is no
+        # longer fixed at 443: http dials 80.
+        "target_ip": (r"^target: ([\d.]+):\d+", str),
+        "target_port": (r"^target: [\d.]+:(\d+)", int),
     }
 
     def build(self, cfg: dict, ip: str) -> None:

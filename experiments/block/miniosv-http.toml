@@ -1,0 +1,40 @@
+name = "miniosv-http"
+title = "HTTP (no TLS): miniOSv GET throughput vs bytes per request"
+description = """
+Which block size to benchmark at: the smallest one that has reached the
+plateau. Unlike every other axis the transfer per run is not constant here —
+bytes are W x C x block, so 2 GiB at 16M and 64 GiB at 512M.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.16xlarge"
+axis     = "block"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 300   # 64 GiB at the 512M point
+out      = "results/block/miniosv/http.csv"
+
+target_ip = ""
+
+[fixed]
+workers = 16
+conns   = 8
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "miniOSv"
+
+[[points]]
+block = "16M"
+[[points]]
+block = "32M"
+[[points]]
+block = "64M"
+[[points]]
+block = "128M"
+[[points]]
+block = "256M"
+[[points]]
+block = "512M"

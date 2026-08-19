@@ -61,6 +61,8 @@ class LinuxS3(Bench):
         # Read from the guest: a stubbed run discards ciphertext instead of
         # decrypting it, and is not the same experiment.
         "tls_stub": (r"^bench:.*tls_stub=(\w+)", lambda v: v == "true"),
+        # An http row measured no TLS, so it is not comparable to an https one.
+        "scheme": (r"^bench:.*scheme=(\w+)", str),
         "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
         "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
         "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
@@ -74,8 +76,10 @@ class LinuxS3(Bench):
         "gbps_transfer": (r"TRANSFER:.*?, ([\d.]+) Gbps", float),
         "setup_wall_s": (r"TRANSFER:.*?\(setup ([\d.]+) s excluded\)", float),
         "bytes": (r"\((\d+) bytes\)", int),
-        # Read back from the guest, not from what we asked for.
-        "target_ip": (r"^target: ([\d.]+):443", str),
+        # Read back from the guest, not from what we asked for. Port is no
+        # longer fixed at 443: http dials 80.
+        "target_ip": (r"^target: ([\d.]+):\d+", str),
+        "target_port": (r"^target: [\d.]+:(\d+)", int),
     }
 
     def __init__(self) -> None:
@@ -128,6 +132,8 @@ class LinuxS3(Bench):
             "BENCH_CONNS_PER_WORKER": str(cfg["conns"]),
             "BENCH_BLOCK_SIZE": str(cfg["block"]),
             "BENCH_TLS_STUB": os.environ.get("BENCH_TLS_STUB", "0"),
+            # "http" drops TLS and dials 80.
+            "BENCH_SCHEME": os.environ.get("BENCH_SCHEME", "https"),
             "MODE": str(cfg["mode"]),
             "RUN_ID": run_id,
         }

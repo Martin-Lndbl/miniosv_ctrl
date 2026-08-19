@@ -1,0 +1,40 @@
+name = "linux-http-parity"
+title = "HTTP (no TLS): Linux (parity) GET throughput vs worker threads at constant offered load"
+description = ""
+
+bench    = "competitors/linux-s3"
+instance = "c6in.16xlarge"
+axis     = "workers"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+out      = "results/workers/linux/http-parity.csv"
+keep_going = true
+
+target_ip = ""
+
+[fixed]
+mode  = "parity"
+block = "128M"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "Linux (parity)"
+
+[[points]]
+workers = 1
+conns   = 128
+[[points]]
+workers = 2
+conns   = 64
+[[points]]
+workers = 4
+conns   = 32
+[[points]]
+workers = 8
+conns   = 16
+[[points]]
+workers = 16
+conns   = 8

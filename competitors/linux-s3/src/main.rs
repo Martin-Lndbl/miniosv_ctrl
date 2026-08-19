@@ -18,6 +18,9 @@ use tune::Tuning;
 // Compile-time on both sides, so the two cannot drift through configuration.
 
 const TARGET_PORT: u16 = 443;
+/// `BENCH_SCHEME=http` dials this and drops TLS entirely. Rows from the two
+/// schemes measure different things and do not belong in one CSV.
+const TARGET_PORT_PLAIN: u16 = 80;
 /// `lib.rs:795`. `BENCH_PATH` overrides it for a local smoke test against an
 /// arbitrary HTTPS host; unset in every real run.
 const DEFAULT_TARGET_PATH: &str = "/blob.bin";
@@ -72,6 +75,8 @@ struct Config {
     object_size: u64,
     block_size: u64,
     stub: bool,
+    /// No TLS, port 80.
+    plain: bool,
     target_ip: Ipv4Addr,
     host: String,
     path: String,
@@ -84,7 +89,19 @@ fn load_config() -> Result<Config, String> {
     let conns_per_worker = parse_size(env("BENCH_CONNS_PER_WORKER"), 24) as usize;
     let object_size = parse_size(env("AWS_BUCKET_SIZE"), 10 * 1024 * 1024 * 1024);
     let block_size = parse_size(env("BENCH_BLOCK_SIZE"), 64 * 1024 * 1024);
-    let stub = parse_bool(env("BENCH_TLS_STUB"), false);
+    let mut stub = parse_bool(env("BENCH_TLS_STUB"), false);
+    // Rejected rather than defaulted: a misspelt scheme would silently run TLS
+    // and produce a row labelled https, which is a wrong measurement.
+    let plain = match env("BENCH_SCHEME").as_deref().unwrap_or("https") {
+        "http" => true,
+        "https" => false,
+        other => return Err(format!("BENCH_SCHEME must be http or https, not {other:?}")),
+    };
+    if plain && stub {
+        // No record layer, so there is no ciphertext to count instead.
+        println!("note: BENCH_TLS_STUB ignored under BENCH_SCHEME=http");
+        stub = false;
+    }
 
     // BENCH_HOST/BENCH_PATH are for the local smoke test only; unset in every
     // real run, where the endpoint comes from the same `.env` the bench uses.
@@ -128,7 +145,7 @@ fn load_config() -> Result<Config, String> {
         _ => Tuning::none(),
     };
 
-    Ok(Config { workers, conns_per_worker, object_size, block_size, stub,
+    Ok(Config { workers, conns_per_worker, object_size, block_size, stub, plain,
                 target_ip, host, path, tuning, mode })
 }
 
@@ -231,6 +248,8 @@ struct Job {
     object_size: u64,
     block_size: u64,
     stub: bool,
+    /// `pump_plain` instead of `pump`.
+    plain: bool,
     tuning: Tuning,
     epoch: Instant,
 }
@@ -254,8 +273,10 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
     }
 
     // Constructed before the barrier, because the smoltcp side constructs its
-    // sockets and `Conn`s before starting the worker clock (§3.6).
-    let tls = UnbufferedClientConnection::new(job.tls.clone(), job.server_name.clone());
+    // sockets and `Conn`s before starting the worker clock (§3.6). None when
+    // plain: no state machine to build.
+    let tls = (!job.plain)
+        .then(|| UnbufferedClientConnection::new(job.tls.clone(), job.server_name.clone()));
 
     // The worker clock starts here: after setup, before the connects are
     // issued, so it excludes construction but includes SYN, establishment and
@@ -269,8 +290,9 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
     }
 
     let mut tls = match tls {
-        Ok(c) => c,
-        Err(e) => {
+        None => None,
+        Some(Ok(c)) => Some(c),
+        Some(Err(e)) => {
             println!("FAIL: rustls new: {e:?}");
             out.failed = true;
             out.finish_ns = epoch.elapsed().as_nanos() as u64;
@@ -312,9 +334,58 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
     }
     let _ = sock.set_read_timeout(Some(STALL_TIMEOUT));
 
-    pump(&sock, &mut tls, &request, stub, tuning, worker, epoch, &mut out);
+    match tls.as_mut() {
+        Some(tls) => pump(&sock, tls, &request, stub, tuning, worker, epoch, &mut out),
+        None => pump_plain(&sock, &request, tuning, worker, epoch, &mut out),
+    }
     out.finish_ns = epoch.elapsed().as_nanos() as u64;
     out
+}
+
+/// `pump` with the record layer removed. Same request bytes, same header
+/// strip, same clean-close rule.
+fn pump_plain(
+    sock: &TcpStream,
+    request: &[u8],
+    tuning: Tuning,
+    worker: usize,
+    epoch: Instant,
+    out: &mut Outcome,
+) {
+    let mut buf = vec![0u8; TLS_BUF_CAP];
+    let mut sock = sock;
+    let mut headers_done = false;
+    let mut hdr_state = 0u8;
+
+    if let Err(e) = sock.write_all(request) {
+        println!("FAIL: q{worker}: write: {e}");
+        return;
+    }
+    // Stands in for "handshake finished": what TRANSFER excludes as setup.
+    out.handshake_ns = epoch.elapsed().as_nanos() as u64;
+
+    loop {
+        if tuning.quickack {
+            let _ = tune::set_quickack(sock.as_raw_fd());
+        }
+        match sock.read(&mut buf) {
+            Ok(0) => {
+                out.closed_cleanly = true;
+                return;
+            }
+            Ok(n) => count_body(
+                &mut out.bytes_received,
+                &mut headers_done,
+                &mut hdr_state,
+                &buf[..n],
+            ),
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                println!("FAIL: q{worker}: read: {e}");   // incl. STALL_TIMEOUT
+                return;
+            }
+        }
+    }
 }
 
 /// The rustls unbuffered state machine, arm for arm from `lib.rs:1028-1091`.
@@ -491,17 +562,19 @@ fn main() {
         }
     };
 
+    let port = if cfg.plain { TARGET_PORT_PLAIN } else { TARGET_PORT };
     println!(
-        "bench: {} workers x {} conns x {} MiB block, tls_stub={}",
+        "bench: {} workers x {} conns x {} MiB block, tls_stub={} scheme={}",
         cfg.workers,
         cfg.conns_per_worker,
         cfg.block_size / (1024 * 1024),
-        cfg.stub
+        cfg.stub,
+        if cfg.plain { "http" } else { "https" }
     );
     let o = cfg.target_ip.octets();
     println!(
         "target: {}.{}.{}.{}:{} {}",
-        o[0], o[1], o[2], o[3], TARGET_PORT, cfg.host
+        o[0], o[1], o[2], o[3], port, cfg.host
     );
     // `q<N>` is the RSS queue on the smoltcp side, only a worker index here.
     // The shape is kept so the logs diff; this line stops it being a claim.
@@ -528,10 +601,11 @@ fn main() {
         server_name,
         host: cfg.host.clone(),
         path: cfg.path.clone(),
-        target: SocketAddr::new(IpAddr::V4(cfg.target_ip), TARGET_PORT),
+        target: SocketAddr::new(IpAddr::V4(cfg.target_ip), port),
         object_size: cfg.object_size,
         block_size: cfg.block_size,
         stub: cfg.stub,
+        plain: cfg.plain,
         tuning: cfg.tuning,
         epoch: Instant::now(),
     };

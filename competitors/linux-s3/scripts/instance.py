@@ -151,9 +151,12 @@ def fingerprint(iface, gw):
     say("mode         : " + MODE)
     say("shape        : {} workers x {} conns x {} block".format(
         cfg("BENCH_WORKERS"), cfg("BENCH_CONNS_PER_WORKER"), cfg("BENCH_BLOCK_SIZE")))
-    say("object       : {}/blob.bin ({})".format(ENDPOINT, cfg("AWS_BUCKET_SIZE")))
+    # The bench's scheme, not this script's: the binary fetch below stays HTTPS.
+    say("object       : {}://{}.s3.{}.amazonaws.com/blob.bin ({})".format(
+        cfg("BENCH_SCHEME", "https"), BUCKET, REGION, cfg("AWS_BUCKET_SIZE")))
     say("target ip    : " + cfg("AWS_TARGET_IP"))
     say("tls stub     : " + cfg("BENCH_TLS_STUB", "0"))
+    say("scheme       : " + cfg("BENCH_SCHEME", "https"))  # http = no TLS at all
 
     rule("machine")
     say("instance     : {} {}".format(imds("instance-type"), imds("instance-id")))
