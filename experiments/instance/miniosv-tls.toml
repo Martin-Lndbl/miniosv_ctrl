@@ -6,7 +6,7 @@ bench    = "apps/bench/smoltcp-s3"
 instance = ""  # overridden per point; the axis is the machine
 axis     = "instance"
 reps     = 3
-cooldown = 180
+cooldown = 0
 max_vm_seconds = 180
 out      = "results/instance/miniosv/tls.csv"
 

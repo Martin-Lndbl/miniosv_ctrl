@@ -6,7 +6,7 @@ bench    = "apps/bench/smoltcp-s3"
 instance = "c6in.8xlarge"
 axis     = "workers"
 reps     = 3
-cooldown = 180
+cooldown = 0
 max_vm_seconds = 110    # measured: 1 worker moves 16 GiB in ~28 s
 out      = "results/workers/miniosv/tls.csv"
 

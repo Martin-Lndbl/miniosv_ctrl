@@ -6,7 +6,7 @@ bench    = "apps/bench/smoltcp-s3"
 instance = "c6in.8xlarge"
 axis     = "conns"
 reps     = 3
-cooldown = 180
+cooldown = 0
 max_vm_seconds = 110
 out      = "results/conns/miniosv/tls.csv"
 
