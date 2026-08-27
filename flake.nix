@@ -56,6 +56,17 @@
               else
                 echo "no .env — run 'just setup'" >&2
               fi
+
+              ctrl_root=$(git rev-parse --show-superproject-working-tree 2>/dev/null || true)
+              [ -n "$ctrl_root" ] || ctrl_root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+              if [ -n "$ctrl_root" ] && [ -e "$ctrl_root/miniosv/.git" ]; then
+                git -C "$ctrl_root/miniosv" config remote.upstream.url >/dev/null 2>&1 ||
+                  git -C "$ctrl_root/miniosv" remote add upstream git@github.com:miniosv/miniosv.git
+                git -C "$ctrl_root/miniosv" config remote.kite.url >/dev/null 2>&1 ||
+                  git -C "$ctrl_root/miniosv" remote add kite git@github.com:TUM-DSE/miniosv.git
+                git -C "$ctrl_root/miniosv" config remote.pushDefault origin
+                git -C "$ctrl_root/miniosv" config checkout.defaultRemote origin
+              fi
             '';
           });
       in
