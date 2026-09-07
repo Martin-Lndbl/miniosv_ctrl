@@ -1,0 +1,84 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+root := parent_directory(parent_directory(justfile_directory()))
+# The root .env, shared with apps/bench/smoltcp-s3, which owns the bucket and
+# the S3 gateway endpoint this bench borrows.
+env_file := root / ".env"
+
+bin_key := "bin/linux-perfevent"
+binary := "build/linux-perfevent"
+
+# List available recipes
+default:
+    @just --list
+
+# Static musl, both arches: it runs on a bare AL2023 instance with no
+# toolchain and a different libstdc++ from this host's.
+
+# Build static binaries for x86-64 and aarch64
+build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "$(dirname "{{ binary }}")"
+    inc="-I src -I {{ root }}/apps/bench/common"
+
+    # Two events on every target -- now the default in src/main.cpp, matching
+    # apps/bench/pmc-perfevent. Nitro grants a guest 2 counters on Graviton
+    # (measured on c7g.large and c8g.large alike) against 8 on c7i and 5 on
+    # c7a, so 2 is the only count every machine serves without perf
+    # multiplexing, which would time-slice and scale the counts into a
+    # different measurement.
+    nix shell nixpkgs#pkgsStatic.stdenv.cc --command \
+        x86_64-unknown-linux-musl-g++ -O2 -std=c++17 -Wall $inc -static \
+        -o "{{ binary }}" src/main.cpp
+
+    nix shell nixpkgs#pkgsCross.aarch64-multiplatform.pkgsStatic.stdenv.cc --command \
+        aarch64-unknown-linux-musl-g++ -O2 -std=c++17 -Wall $inc -static \
+        -o "{{ binary }}-aarch64" src/main.cpp
+
+    file "{{ binary }}" "{{ binary }}-aarch64"
+
+# Build, upload to the shared bucket, and grant the gateway endpoint a read
+setup: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . "{{ env_file }}"; set +a
+
+    for suffix in "" "-aarch64"; do
+        echo "uploading $(stat -c %s {{ binary }}$suffix) bytes to s3://$AWS_BUCKET/{{ bin_key }}$suffix"
+        aws s3 cp "{{ binary }}$suffix" "s3://$AWS_BUCKET/{{ bin_key }}$suffix" --only-show-errors
+    done
+
+    just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" _policy add
+
+# Shares the Sid with the other linux-* benches: all grant a read under bin/*,
+# and bucket_policy.py merges by Sid rather than writing the document wholesale.
+
+# Add or remove this bench's bucket-policy statement
+_policy action:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . "{{ env_file }}"; set +a
+    vpce=$(aws ec2 describe-vpc-endpoints \
+        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
+                  "Name=vpc-endpoint-type,Values=Gateway" \
+        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
+    python3 "{{ root }}/scripts/bucket_policy.py" \
+        "{{ action }}" --sid BenchBinFromVpce --vpce "$vpce" \
+        --resource "arn:aws:s3:::$AWS_BUCKET/bin/*"
+
+# Launch on EC2 and bring back the console (default c7i.large)
+deploy instance="c7i.large" *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . "{{ env_file }}"; set +a
+    python3 "{{ root }}/competitors/common/deploy.py" "{{ instance }}" \
+        --key linux-perfevent --results pmc-perfevent \
+        --marker pmc-perfevent --csv-tag PERFEVENT {{ args }}
+
+# Run the benchmark on this machine, without EC2
+local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" build
+    ./{{ binary }}

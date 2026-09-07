@@ -41,6 +41,28 @@ RESULTS = ROOT / "results"
 PALETTE = ["#2a78d6", "#eb6834", "#1baf7a"]
 HATCH = ["", "//", "xx"]
 
+# Blue and orange mean miniOSv and Linux, in every figure of the evaluation
+# section that has an OS axis. That only works if nothing else claims them:
+# pmc-cost is miniOSv-only and its bars separate machines, not systems, so
+# reusing slot 0 and 1 there would have taught the audience a colour code on
+# one slide and contradicted it on the next.
+#
+# Violet/teal/slate, chosen to sit outside both reserved hue families -- no
+# brown, which reads as a dark orange. Pitched at roughly the tint of the blue
+# and orange they sit beside: a first attempt at #762a83/#1b7837/#4d4d4d
+# separated cleanly but read as much heavier than the rest of the deck, which
+# is light TUM blue on white. Hue does the separating and hatch plus value
+# labels back it up, so the colours can afford to be this light.
+MACHINE_PALETTE = ["#a17fd5", "#4fb8a8", "#8c96a0"]
+
+# What a series is called on the figure, where it differs from its pooling key.
+# "Linux (no throttle)" is the key -- it must stay distinct so captures under
+# different kernel settings never average together -- but with the governor off
+# both systems deliver the same rate, so the qualifier no longer describes
+# anything the plot shows and only invited a question it does not answer. The
+# condition is recorded in sampling.md.
+LEGEND_LABEL = {"Linux (no throttle)": "Linux"}
+
 # One workload size, stated on the figure. The cost is flat in region size --
 # measured from 1ns to 74us, it never moves off its constant -- so a sweep
 # spends a whole axis proving a line is horizontal. A bar at one size says the
@@ -160,7 +182,7 @@ def counting(out: Path) -> pd.DataFrame:
     n = min(s["boots"] for s in stats.values())
     ax.set_xticks(x, [label for _, label in machines])
     ax.set_ylabel("Added time per measured region (µs)")
-    ax.set_title("PerfEvent overhead (Virtualized)")
+    ax.set_title("PerfEvent overhead with 2 counters")
     ax.margins(y=0.22)
     ax.grid(True, axis="y", alpha=0.3)
     ax.set_axisbelow(True)
@@ -210,9 +232,29 @@ COST_FLOOR_PCT = 0.5
 def sample_id(csv: Path) -> tuple[str, str]:
     stem = csv.stem.removesuffix("-sample")
     _, _, rest = stem.partition("-")
+    # linuxnt is Linux with perf's rate throttling disabled -- a separate
+    # series, since stock is what a user actually gets. This is the pooling
+    # key, not the legend text: the two must stay distinct here or captures
+    # taken under different kernel settings would average together. See
+    # LEGEND_LABEL for what the figure calls it.
+    if rest.startswith("linuxnt-"):
+        return "Linux (no throttle)", rest[len("linuxnt-"):]
     if rest.startswith("linux-"):
         return "Linux", rest[len("linux-"):]
     return "miniOSv", rest
+
+
+def clock_of(log: Path) -> float:
+    """Core clock in MHz from a capture's console log, NaN if absent.
+
+    Every pmc-* banner prints cpu_mhz, so this is read back from the boot that
+    produced the numbers rather than assumed from the instance type -- the
+    whole point is that two boots of the same type do not share a clock.
+    """
+    if not log.exists():
+        return float("nan")
+    m = re.search(r"cpu_mhz=([0-9.]+)", log.read_text(errors="ignore"))
+    return float(m.group(1)) if m else float("nan")
 
 
 def sampling(out: Path) -> pd.DataFrame:
@@ -228,10 +270,13 @@ def sampling(out: Path) -> pd.DataFrame:
         # A rep that armed but never fired is broken, not cheap.
         d = d[(d["dead"] == 0) & (d["base_ns"] > 0)].copy()
         d["overhead_pct"] = 100 * (d["sampled_ns"] - d["base_ns"]) / d["base_ns"]
-        # Overhead against *requested* frequency is not comparable once one
-        # system throttles: at 50kHz Linux delivers ~16.5k/s and miniOSv
-        # ~29k/s, so the same x position is two different amounts of work and
-        # Linux looks cheaper largely for having declined the job.
+        # Overhead against *requested* frequency is not comparable whenever the
+        # two systems deliver different amounts: the same x position is then two
+        # different amounts of work, and whichever delivered less looks cheaper
+        # for having declined part of the job. Turning the kernel throttle off
+        # removes the largest source of that gap but not all of it -- a sampled
+        # second is stretched by the overhead itself, so neither system delivers
+        # exactly what was asked.
         #
         # Cost per delivered sample removes that. In one sampled second the
         # added time is ovh/(1+ovh), shared among samples_per_s samples, so
@@ -239,6 +284,17 @@ def sampling(out: Path) -> pd.DataFrame:
         # Computed per row and then pooled, never from pooled medians.
         f = d["overhead_pct"] / 100.0
         d["ns_per_sample"] = 1e9 * (f / (1.0 + f)) / d["samples_per_s"]
+        # The same cost with the boot's core clock divided out. Not plotted --
+        # the figure is wall-clock, which is what a user experiences -- but
+        # recorded, because nanoseconds carry whichever host EC2 handed out:
+        # c7i.large boots here drew 3198 to 3722 MHz, a 16% spread, and the
+        # miniOSv boots averaged slower than the Linux ones. Cycles put the
+        # unsampled workload at 255.9 against 256.4 on the two systems, which
+        # is the control that says the harness measures the same thing on both
+        # sides; in nanoseconds those same rows differ by 2.5%.
+        d["mhz"] = clock_of(csv.with_name(
+            csv.name.replace("-sample.csv", ".log")))
+        d["cycles_per_sample"] = d["ns_per_sample"] * d["mhz"] / 1e3
         # Only the Linux side reports this, and only since the throttle
         # instrumentation; absent means "not measured", which is not zero.
         if "throttles" not in d.columns:
@@ -246,16 +302,35 @@ def sampling(out: Path) -> pd.DataFrame:
         d["boot"] = csv.name
         boots.setdefault(sample_id(csv), []).append(d)
 
-    # Not sharex: the cost panel has no measurable point at 99Hz, and a shared
-    # axis forced it to render an empty decade that read as missing data.
-    # Each panel now spans the range over which its own quantity exists.
-    fig, (ax_cost, ax_fid) = plt.subplots(1, 2, figsize=(9.6, 4.0), dpi=200)
+    # Nothing to draw is a normal state, not a crash: the results directory is
+    # empty for the whole of a re-run, and plotting the other two figures
+    # should not depend on this one having data.
+    if not boots:
+        print("  no usable pmc-sample captures; skipping the sampling figure")
+        return pd.DataFrame()
+
+    # One panel, not two. The delivered-rate panel existed to show that Linux
+    # declines part of the job at high frequencies -- but that shortfall was
+    # perf_cpu_time_max_percent, and with the throttle off Linux tracks miniOSv,
+    # so the panel became two curves lying on 100% and said nothing the cost
+    # panel does not. delivered_pct is still computed, still gates `dead` reps
+    # and still reaches the markdown table; it is the *plot* that dropped it,
+    # because a validity check the reader has to be told is uninformative is
+    # better checked than drawn.
+    fig, ax_cost = plt.subplots(1, 1, figsize=(6.4, 4.0), dpi=200)
 
     # Colour is the OS and dash is the architecture, so the eye groups by what
     # is being compared -- miniOSv against Linux on the same silicon -- rather
     # than by machine. With four series the default colour cycle alone would
     # make every line look like a separate result.
-    colour = {"miniOSv": PALETTE[0], "Linux": PALETTE[1]}
+    #
+    # No-throttle takes the Linux slot when stock Linux is not in the figure,
+    # so this keeps the two-colour OS pairing the counting figure uses rather
+    # than introducing a third hue for what is still just "Linux". Both present
+    # and they separate.
+    stock_present = any(os_name == "Linux" for os_name, _ in boots)
+    colour = {"miniOSv": PALETTE[0], "Linux": PALETTE[1],
+              "Linux (no throttle)": PALETTE[2] if stock_present else PALETTE[1]}
 
     def is_arm(inst: str) -> bool:
         return re.match(r"^[a-z]+\dg", inst) is not None
@@ -268,6 +343,8 @@ def sampling(out: Path) -> pd.DataFrame:
                    olo=("ns_per_sample", lambda v: v.quantile(0.25)),
                    ohi=("ns_per_sample", lambda v: v.quantile(0.75)),
                    ovh_pct=("overhead_pct", "median"),
+                   cycles=("cycles_per_sample", "median"),
+                   mhz=("mhz", "median"),
                    delivered=("delivered_pct", "median"),
                    dlo=("delivered_pct", lambda v: v.quantile(0.25)),
                    dhi=("delivered_pct", lambda v: v.quantile(0.75)),
@@ -276,76 +353,66 @@ def sampling(out: Path) -> pd.DataFrame:
               .reset_index().sort_values("freq_hz"))
         # NaN, not zero: the cost at these frequencies is unmeasured, not
         # free. matplotlib leaves a gap rather than drawing a line to zero.
+        #
+        # `cycles` is masked with them, not after them. It is the same quantity
+        # in another unit, so it is unmeasured wherever they are -- left
+        # unmasked it reported -25703 cycles per sample at 99Hz, a negative
+        # cost, which is what dividing noise by a clock produces.
         too_small = df["ovh_pct"] < COST_FLOOR_PCT
-        df.loc[too_small, ["overhead", "olo", "ohi"]] = float("nan")
+        df.loc[too_small, ["overhead", "olo", "ohi", "cycles"]] = float("nan")
         rows.append(df.assign(system=f"{os_name} {inst}"))
 
         col = colour.get(os_name, PALETTE[2])
         style = "--" if is_arm(inst) else "-"
         marker = "s" if is_arm(inst) else "o"
         arch = "aarch64" if is_arm(inst) else "x86-64"
-        for ax, med, lo, hi in ((ax_cost, "overhead", "olo", "ohi"),
-                                (ax_fid, "delivered", "dlo", "dhi")):
-            ax.plot(df["freq_hz"], df[med] / (1e3 if med == "overhead" else 1),
-                    style, color=col,
-                    label=f"{os_name} · {inst} ({arch})")
-            sc = 1e3 if med == "overhead" else 1
-            ax.fill_between(df["freq_hz"], df[lo] / sc, df[hi] / sc,
-                            color=col, alpha=0.12)
-            # Hollow marks a point thin enough that its median is not worth the
-            # same trust as the rest of the line.
-            thin = df["reps"] < MIN_REPS
-            ax.plot(df["freq_hz"][~thin], df[med][~thin] / sc, marker, ms=5,
-                    color=col)
-            ax.plot(df["freq_hz"][thin], df[med][thin] / sc, marker, ms=5,
-                    mfc="white", mew=1.5, color=col)
+        # ns -> us; the medians are stored in nanoseconds per delivered sample.
+        sc = 1e3
+        ax_cost.plot(df["freq_hz"], df["overhead"] / sc, style, color=col,
+                     label=f"{LEGEND_LABEL.get(os_name, os_name)} · {inst} "
+                           f"({arch})")
+        ax_cost.fill_between(df["freq_hz"], df["olo"] / sc, df["ohi"] / sc,
+                             color=col, alpha=0.12)
+        # Hollow marks a point thin enough that its median is not worth the
+        # same trust as the rest of the line.
+        thin = df["reps"] < MIN_REPS
+        ax_cost.plot(df["freq_hz"][~thin], df["overhead"][~thin] / sc, marker,
+                     ms=5, color=col)
+        ax_cost.plot(df["freq_hz"][thin], df["overhead"][thin] / sc, marker,
+                     ms=5, mfc="white", mew=1.5, color=col)
 
-    for ax in (ax_cost, ax_fid):
-        ax.axvline(PERF_DEFAULT, color="grey", lw=1, ls=":")
-        ax.set_xscale("log")
-        ax.set_xlabel("Sampling frequency (Hz)")
-        ax.grid(True, alpha=0.3)
-        ax.set_axisbelow(True)
+    ax_cost.axvline(PERF_DEFAULT, color="grey", lw=1, ls=":")
+    ax_cost.set_xscale("log")
+    ax_cost.set_xlabel("Sampling frequency (Hz)")
+    ax_cost.grid(True, alpha=0.3)
+    ax_cost.set_axisbelow(True)
+    # Nudged inside the axes rather than sat on the frame: at 0.97 with no y
+    # offset the text rode the top border once the figure became a single
+    # panel and gained height.
     ax_cost.annotate("perf default", (PERF_DEFAULT, 0.97),
                      xycoords=("data", "axes fraction"),
-                     textcoords="offset points", xytext=(-5, 0), ha="right",
+                     textcoords="offset points", xytext=(-5, -5), ha="right",
                      va="top", fontsize=8, color="grey")
 
     ax_cost.set_ylabel("Added time per delivered sample (µs)")
-    ax_cost.set_title("Cost per sample")
     ax_cost.set_ylim(0, None)
     # Starts at the first frequency whose overhead clears the noise floor.
     ax_cost.set_xlim(left=700)
+    # Lower right, not upper: cost per sample is flat-to-rising, so the curves
+    # live in the upper band and an upper-left legend sat on top of the c7i
+    # line. Linux is the more expensive system, so it lands higher still and
+    # leaves this corner clear.
+    ax_cost.legend(loc="lower right")
 
-    # The shaded "below 90%" band and its caption are gone: the y axis already
-    # says what fraction arrived, so the band restated the reading in prose
-    # and cost more ink than the data.
-    ax_fid.set_ylabel("Samples delivered (% of requested)")
-    ax_fid.set_title("Delivered rate")
-    ax_fid.set_ylim(0, 105)
-    ax_fid.legend(loc="lower left")
-
-    # Where Linux's own governor starts cutting the rate. Below this point the
-    # whole shortfall is the wall-clock stretch that both systems share -- at
-    # 10kHz, 16.5% overhead predicts 85.8% delivery and 86% arrives. At 50kHz
-    # the kernel emits PERF_RECORD_THROTTLE and takes off half again, which is
-    # perf_cpu_time_max_percent working as designed rather than a defect.
-    # Anchored on the throttled point and set just above it, in the wedge
-    # between the descending Linux curves and the bottom of the panel. At 45%
-    # it ran along those curves; below the point it collided with the legend.
-    thr = [(f, d, dl) for r in rows for f, d, dl in
-           zip(r["freq_hz"], r["throttles"], r["delivered"])
-           if d == d and d > 0]
+    # A throttled rep is still worth knowing about even though the panel that
+    # showed it is gone: with PERF_NO_THROTTLE set there should be none, and a
+    # non-zero count means the sysctls did not take on that boot.
+    thr = sum(int(d) for r in rows for d in r["throttles"] if d == d)
     if thr:
-        first = min(f for f, _, _ in thr)
-        at = min(dl for f, _, dl in thr if f == first)
-        ax_fid.annotate("PERF_RECORD_THROTTLE", (first, at),
-                        textcoords="offset points", xytext=(-6, 24),
-                        ha="right", fontsize=8, color=PALETTE[1],
-                        arrowprops=dict(arrowstyle="->", color=PALETTE[1],
-                                        lw=1))
+        print(f"  warning: {thr} PERF_RECORD_THROTTLE events in a "
+              f"no-throttle run; check relax_perf() on those boots")
 
-    fig.suptitle("Sampling overhead and fidelity (Virtualized)", y=0.99)
+    fig.suptitle("Sampling overhead", y=0.99)
     fig.tight_layout()
     save(fig, out)
     plt.close(fig)
@@ -410,19 +477,20 @@ def primitives(out: Path) -> pd.DataFrame:
         ])
         bars = ax.bar(x + (i - (len(machines) - 1) / 2) * width, vals, width,
                       yerr=err, capsize=3, label=VENDOR[machine],
-                      color=PALETTE[i], hatch=HATCH[i], edgecolor="white",
+                      color=MACHINE_PALETTE[i], hatch=HATCH[i],
+                      edgecolor="white",
                       linewidth=0.8)
         ax.bar_label(bars, fmt="%.1f", padding=2, fontsize=7.5)
 
     ax.set_xticks(x, [label for _, label in PRIMS])
     ax.set_ylabel("Wall-clock time per call (µs)")
-    ax.set_title("Low-level primitive cost (Virtualized)")
+    ax.set_title("Low-level primitive cost")
     ax.margins(y=0.18)
     ax.grid(True, axis="y", alpha=0.3)
     ax.set_axisbelow(True)
     # Legend only. The conditions it carried -- boots, median, IQR -- are in
-    # primitives.md, and "(Virtualized)" in the title now says the thing the
-    # second line was there to say.
+    # primitives.md; every one of these numbers comes from an EC2 guest, so
+    # saying so in the title spent a line on a constant.
     ax.legend(loc="upper right")
     fig.tight_layout()
     save(fig, out)
@@ -448,18 +516,34 @@ def main() -> int:
     )
     print(f"wrote {out}")
 
-    sout = RESULTS / "pmc-sample" / "fidelity.png"
+    # Named for what it now shows: the fidelity panel is gone from the figure,
+    # though delivered_pct stays in the table below.
+    sout = RESULTS / "pmc-sample" / "sampling.png"
     stable = sampling(sout)
-    sout.with_suffix(".md").write_text(
-        "# Sampling — cost and fidelity vs frequency\n\n"
-        "Median and IQR over all reps of all boots. Points with fewer than "
-        f"{MIN_REPS} reps are drawn hollow.\n\n"
-        + stable[["system", "freq_hz", "boots", "reps", "overhead",
-                  "ovh_pct", "delivered"]]
-        .rename(columns={"overhead": "ns_per_sample", "ovh_pct": "overhead_pct"})
-        .to_markdown(index=False, floatfmt=".2f") + "\n"
-    )
-    print(f"wrote {sout}")
+    # Guarded: an empty results directory during a re-run should not stop the
+    # other two figures being written.
+    if not stable.empty:
+        sout.with_suffix(".md").write_text(
+            "# Sampling — cost vs frequency\n\n"
+            "Median and IQR over all reps of all boots. Points with fewer than "
+            f"{MIN_REPS} reps are drawn hollow. delivered_pct is reported here "
+            "rather than plotted: with the kernel throttle off it sits at the "
+            "wall-clock-stretch prediction for both systems.\n\n"
+            "The figure is nanoseconds, which is what a user experiences. "
+            "`cycles_per_sample` is the same cost with `mhz` divided out, and "
+            "is the fairer miniOSv-vs-Linux number: c7i.large boots drew "
+            "3198-3722 MHz here, so a nanosecond figure carries whichever host "
+            "that boot happened to get. The unsampled workload is identical "
+            "code on both systems and lands within 0.2% in cycles, which is "
+            "the control for that claim.\n\n"
+            + stable[["system", "freq_hz", "boots", "reps", "overhead",
+                      "cycles", "mhz", "ovh_pct", "delivered"]]
+            .rename(columns={"overhead": "ns_per_sample",
+                             "cycles": "cycles_per_sample",
+                             "ovh_pct": "overhead_pct"})
+            .to_markdown(index=False, floatfmt=".2f") + "\n"
+        )
+        print(f"wrote {sout}")
 
     pout = RESULTS / "pmc-cost" / "primitives.png"
     ptable = primitives(pout)

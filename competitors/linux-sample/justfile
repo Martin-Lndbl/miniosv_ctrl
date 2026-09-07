@@ -1,0 +1,131 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+root := parent_directory(parent_directory(justfile_directory()))
+# The root .env, shared with apps/bench/smoltcp-s3, which owns the bucket and
+# the S3 gateway endpoint this bench borrows.
+env_file := root / ".env"
+
+# Where the static binary lands in the bucket; instance.py fetches it unsigned.
+bin_key := "bin/linux-sample"          # + "-aarch64" for the Graviton build
+binary := "build/linux-sample"
+
+# List available recipes
+default:
+    @just --list
+
+# Static musl: runs on a bare AL2023 instance with no toolchain and a
+# different glibc from this host's. Both arches, because the comparison spans
+# c7i and c7g.
+
+# Build static binaries for x86-64 and aarch64
+build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "$(dirname "{{ binary }}")"
+
+    nix shell nixpkgs#pkgsStatic.stdenv.cc --command \
+        x86_64-unknown-linux-musl-gcc -O2 -Wall -Wextra -static \
+        -o "{{ binary }}" src/main.c
+
+    nix shell nixpkgs#pkgsCross.aarch64-multiplatform.pkgsStatic.stdenv.cc --command \
+        aarch64-unknown-linux-musl-gcc -O2 -Wall -Wextra -static \
+        -o "{{ binary }}-aarch64" src/main.c
+
+    file "{{ binary }}" "{{ binary }}-aarch64"
+
+# Build, upload to the shared bucket, and grant the gateway endpoint a read
+setup: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [ ! -f "{{ env_file }}" ]; then
+        echo "no {{ env_file }} — run 'just setup apps/bench/smoltcp-s3' first." >&2
+        echo "That recipe owns the bucket and the S3 gateway endpoint; this one" >&2
+        echo "only adds a second binary to the same bucket." >&2
+        exit 1
+    fi
+    set -a; . "{{ env_file }}"; set +a
+
+    for req in AWS_BUCKET AWS_REGION AWS_SUBNET; do
+        if [ -z "${!req:-}" ]; then
+            echo "$req missing from {{ env_file }}" >&2
+            exit 1
+        fi
+    done
+
+    if ! aws sts get-caller-identity >/dev/null 2>&1; then
+        echo "not logged in to aws — run 'aws login --remote'" >&2
+        exit 1
+    fi
+
+    for suffix in "" "-aarch64"; do
+        echo "uploading $(stat -c %s {{ binary }}$suffix) bytes to s3://$AWS_BUCKET/{{ bin_key }}$suffix"
+        aws s3 cp "{{ binary }}$suffix" "s3://$AWS_BUCKET/{{ bin_key }}$suffix" --only-show-errors
+    done
+
+    just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" _policy add
+
+# Shares the Sid with linux-s3 on purpose: both grant a read under bin/*, and
+# bucket_policy.py merges by Sid rather than writing the document wholesale.
+
+# Add or remove this bench's bucket-policy statement
+_policy action:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . "{{ env_file }}"; set +a
+
+    vpce=$(aws ec2 describe-vpc-endpoints \
+        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
+                  "Name=vpc-endpoint-type,Values=Gateway" \
+        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
+    if [ -z "$vpce" ] || [ "$vpce" = "None" ]; then
+        echo "no S3 gateway endpoint in $AWS_REGION — run 'just setup apps/bench/smoltcp-s3'" >&2
+        exit 1
+    fi
+
+    python3 "{{ root }}/scripts/bucket_policy.py" \
+        "{{ action }}" --sid BenchBinFromVpce --vpce "$vpce" \
+        --resource "arn:aws:s3:::$AWS_BUCKET/bin/*"
+
+# Launch on EC2 and bring back the console (default c7i.large)
+deploy instance="c7i.large" *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . "{{ env_file }}"; set +a
+    python3 "{{ root }}/competitors/common/deploy.py" "{{ instance }}" \
+        --key linux-sample --results pmc-sample \
+        --marker pmc-sample --csv-tag SAMPLE {{ args }}
+
+# Run the benchmark on this machine, without EC2
+local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" build
+    ./{{ binary }}
+
+# Remove the uploaded binary and this bench's policy statement
+clean *force:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . "{{ env_file }}"; set +a
+
+    echo "about to delete:"
+    echo "  s3://$AWS_BUCKET/{{ bin_key }}"
+    echo "  local {{ binary }}"
+    echo "note: the BenchBinFromVpce policy statement is shared with linux-s3"
+    echo "      and is left in place."
+
+    if [ "{{ force }}" != "force" ]; then
+        if [ -t 0 ]; then
+            read -r -p "proceed? [y/N]: " answer || true
+            [ "${answer:-}" = "y" ] || { echo "aborted" >&2; exit 1; }
+        else
+            echo "refusing without a tty — use 'just clean force'" >&2
+            exit 1
+        fi
+    fi
+
+    aws s3 rm "s3://$AWS_BUCKET/{{ bin_key }}" --only-show-errors || true
+    aws s3 rm "s3://$AWS_BUCKET/{{ bin_key }}-aarch64" --only-show-errors || true
+    rm -f "{{ binary }}" "{{ binary }}-aarch64"
+    echo "removed"
