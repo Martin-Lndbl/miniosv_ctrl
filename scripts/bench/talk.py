@@ -459,7 +459,7 @@ def primitives(out: Path) -> pd.DataFrame:
             if not d.empty:
                 stats[(machine, op)] = dict(
                     med=d.median(), lo=d.quantile(0.25), hi=d.quantile(0.75),
-                    boots=raw["boot"].nunique(), vals=d.to_numpy())
+                    boots=raw["boot"].nunique())
 
     machines = [m for m in VENDOR if all((m, op) in stats for op, _ in PRIMS)]
 
@@ -467,31 +467,40 @@ def primitives(out: Path) -> pd.DataFrame:
     width = 0.26
     x = np.arange(len(PRIMS))
 
-    # Every repetition as a dot, over the median bar -- no error bar.
+    # Median bar with IQR whiskers, the same summary the counting and sampling
+    # figures use. Three figures in one section should not each teach a
+    # different way of reading dispersion.
     #
-    # An IQR whisker asserts one population with symmetric spread around a
-    # centre, and Graviton's write is not that: it alternates between ~2.25us
-    # and ~4.2us, roughly 2x apart, on a timescale of seconds. The whisker drew
-    # a bar at 4.1 reaching down to 2.3 and implied the truth was somewhere in
-    # between, which is the one value the operation never takes. The dots show
-    # two clusters because there are two clusters.
-    #
-    # It costs nothing on the stable bars: read and stop hold to under 1% and
-    # x86 write to under 1% within a boot, so their dots collapse into a line
-    # and say "no spread" as clearly as a whisker would have.
-    rng = np.random.default_rng(0)  # seeded: the jitter must not move between
-    for i, machine in enumerate(machines):  # regenerations of the same figure
+    # The cost is real and worth knowing: Graviton's write is bimodal -- 21 of
+    # 40 repetitions cluster at 2.21-2.34us and 15 at 4.06-4.33 -- and a whisker
+    # spanning that range implies one population centred between the two, which
+    # is where the operation almost never is. The median is also unstable under
+    # resampling for the same reason: 4.1 over 3 boots, 2.3 over 8. primitives.md
+    # carries the clusters and warns against quoting the median for that cell.
+    for i, machine in enumerate(machines):
         pos = x + (i - (len(machines) - 1) / 2) * width
         vals = [stats[(machine, op)]["med"] for op, _ in PRIMS]
-        bars = ax.bar(pos, vals, width, label=VENDOR[machine],
-                      color=MACHINE_PALETTE[i], hatch=HATCH[i],
-                      edgecolor="white", linewidth=0.8)
-        ax.bar_label(bars, fmt="%.1f", padding=2, fontsize=7.5)
-        for xi, (op, _) in zip(pos, PRIMS):
-            v = stats[(machine, op)]["vals"]
-            ax.scatter(xi + rng.uniform(-width * 0.28, width * 0.28, len(v)),
-                       v, s=5, c="#2b2b2b", alpha=0.5, linewidths=0,
-                       zorder=3)
+        err = np.array([
+            [stats[(machine, op)]["med"] - stats[(machine, op)]["lo"]
+             for op, _ in PRIMS],
+            [stats[(machine, op)]["hi"] - stats[(machine, op)]["med"]
+             for op, _ in PRIMS],
+        ])
+        ax.bar(pos, vals, width, yerr=err, capsize=4,
+               label=VENDOR[machine],
+               color=MACHINE_PALETTE[i], hatch=HATCH[i],
+               edgecolor="white", linewidth=0.8)
+        # Placed at the bar top by hand, not with bar_label: given yerr, that
+        # puts the number above the *whisker*. On Graviton's write, whose IQR
+        # runs from 2.26 to 4.18 around a 2.34 median, the "2.3" ended up
+        # floating at 4.3 -- reading as the height of a bar twice as tall as
+        # the one drawn. The white halo keeps it legible where the whisker
+        # passes behind it.
+        for xi, v in zip(pos, vals):
+            ax.text(xi, v, f"{v:.1f}", ha="center", va="bottom", fontsize=7.5,
+                    zorder=4,
+                    bbox=dict(facecolor="white", edgecolor="none",
+                              alpha=0.75, pad=0.8))
 
     ax.set_xticks(x, [label for _, label in PRIMS])
     ax.set_ylabel("Wall-clock time per call (µs)")
@@ -507,12 +516,109 @@ def primitives(out: Path) -> pd.DataFrame:
     save(fig, out)
     plt.close(fig)
 
-    # `vals` is the per-rep array the dots are drawn from; it belongs to the
-    # figure, not to a table of one row per (machine, op).
-    return pd.DataFrame([
-        dict(machine=m, op=op,
-             **{k: v for k, v in stats[(m, op)].items() if k != "vals"})
-        for m in machines for op, _ in PRIMS])
+    return pd.DataFrame([dict(machine=m, op=op, **stats[(m, op)])
+                         for m in machines for op, _ in PRIMS])
+
+
+# ---------------------------------------------------------------------------
+# The same primitives with no hypervisor underneath -- the virtualization bill
+# ---------------------------------------------------------------------------
+# Cycles, not nanoseconds, and not by preference: nothing manages P-states on
+# bare metal, so the metal instance runs at 1.0GHz against the guest's 3.3, and
+# a wall-clock figure would say as much about the frequency as about the
+# operation. Cycles divide that out exactly -- cpu_hz is itself measured as
+# (PMU cycles / steady_clock seconds), so ns/op * cpu_hz collapses to cycles/op
+# and the wall clock cancels rather than being trusted.
+#
+# The control is loop_overhead: the same empty loop, 2.0 cycles on both sides.
+# It is plotted for that reason and no other -- if virtualization were leaking
+# into the measurement, it would show there first.
+#
+# Both sides run the identical image (same kernel, same benchmark, same legacy
+# BIOS boot path) on the same microarchitecture: c7i.metal-24xl against
+# c7i.large, both Sapphire Rapids. c5.metal was the first attempt and is not
+# used -- Skylake-SP, which would have confounded "no hypervisor" with a change
+# of core.
+METAL_PRIMS = [
+    ("loop_overhead", "empty loop"),
+    ("pmc_read", "read"),
+    ("pmc_write", "write"),
+    ("pmc_start_with_conf", "start"),
+    ("pmc_stop", "stop"),
+]
+
+
+def metal(out: Path) -> pd.DataFrame:
+    src = RESULTS / "pmc-cost" / "metal-experiment"
+
+    def load_side(pattern: str):
+        vals: dict[str, list[float]] = {}
+        clocks = []
+        for csv in sorted(src.glob(pattern + "-prim.csv")):
+            log = csv.with_name(csv.name.replace("-prim.csv", ".log"))
+            mhz = clock_of(log)
+            if not csv.stat().st_size or mhz != mhz:
+                continue
+            clocks.append(mhz)
+            d = pd.read_csv(csv)
+            for op in d["op"].unique():
+                # Per row, then pooled: ns * MHz/1e3 is this boot's cycle count,
+                # and boots do not share a clock.
+                vals.setdefault(op, []).extend(
+                    (d[d["op"] == op]["ns_per_op"] * mhz / 1e3).tolist())
+        return vals, clocks
+
+    bare, mhz_bare = load_side("*c7i.metal-24xl")
+    guest, mhz_guest = load_side("*c7i.large")
+    if not bare or not guest:
+        print("  no metal-experiment captures; skipping the bare-metal figure")
+        return pd.DataFrame()
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.0), dpi=200)
+    width = 0.36
+    x = np.arange(len(METAL_PRIMS))
+    sides = [("Bare metal", bare, mhz_bare), ("Virtualized", guest, mhz_guest)]
+
+    rows = []
+    for i, (label, vals, mhz) in enumerate(sides):
+        pos = x + (i - 0.5) * width
+        med = [float(np.median(vals[op])) for op, _ in METAL_PRIMS]
+        lo = [float(np.quantile(vals[op], 0.25)) for op, _ in METAL_PRIMS]
+        hi = [float(np.quantile(vals[op], 0.75)) for op, _ in METAL_PRIMS]
+        err = np.array([np.subtract(med, lo), np.subtract(hi, med)])
+        # Not PALETTE: blue and orange mean miniOSv and Linux everywhere in
+        # this section, and both bars here are miniOSv -- the axis is the
+        # hypervisor. Reusing them would teach one colour code on this slide
+        # and contradict it on the next.
+        #
+        # No clock in the label. The axis is cycles, which already divides the
+        # clock out, so quoting 1.0GHz against 3.3GHz only invited the question
+        # of why they differ -- which this figure does not answer and does not
+        # depend on. The clocks stay in metal.md.
+        ax.bar(pos, med, width, yerr=err, capsize=4, label=label,
+               color=MACHINE_PALETTE[i], hatch=HATCH[i], edgecolor="white",
+               linewidth=0.8)
+        for xi, v in zip(pos, med):
+            ax.text(xi, v, f"{v:,.0f}" if v >= 10 else f"{v:.1f}",
+                    ha="center", va="bottom", fontsize=7.5, zorder=4,
+                    bbox=dict(facecolor="white", edgecolor="none",
+                              alpha=0.75, pad=0.8))
+        for (op, _), m in zip(METAL_PRIMS, med):
+            rows.append(dict(side=label, op=op, cycles=m))
+
+    # Log scale: an empty loop is 2 cycles and a virtualized write is 8085, so
+    # on a linear axis every bare-metal bar would be a line on the floor.
+    ax.set_yscale("log")
+    ax.set_xticks(x, [lab for _, lab in METAL_PRIMS])
+    ax.set_ylabel("Cycles per call")
+    ax.set_title("Counter access with and without a hypervisor")
+    ax.grid(True, axis="y", alpha=0.3)
+    ax.set_axisbelow(True)
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    save(fig, out)
+    plt.close(fig)
+    return pd.DataFrame(rows)
 
 
 def main() -> int:
@@ -575,13 +681,34 @@ def main() -> int:
         "seconds. With two clusters of near-equal mass the median reports "
         "whichever one held the majority that day: it read 4.1 over the first "
         "3 boots and 2.3 over all 8, and neither is a value the operation "
-        "spends much time at. The figure plots every repetition as a dot for "
-        "this reason. The effect is specific to writing a counter and to "
+        "spends much time at. That is also why its IQR whisker is so lopsided "
+        "on the figure: it spans the two clusters rather than a spread around "
+        "the bar. The effect is specific to writing a counter and to "
         "aarch64 -- `pmc_read` and `pmc_stop` on the same boots hold to under "
         "1%, and x86 `pmc_write` holds to under 1% within a boot.\n\n"
         + ptable.to_markdown(index=False, floatfmt=".2f") + "\n"
     )
     print(f"wrote {pout}")
+
+    mout = RESULTS / "pmc-cost" / "metal.png"
+    mtable = metal(mout)
+    if not mtable.empty:
+        mout.with_suffix(".md").write_text(
+            "# Counter access with and without a hypervisor\n\n"
+            "Cycles per call, median and IQR. c7i.metal-24xl against "
+            "c7i.large: same Sapphire Rapids core, same kernel, same image, "
+            "same benchmark -- only the hypervisor differs.\n\n"
+            "Cycles rather than nanoseconds because nothing manages P-states "
+            "on bare metal: the metal instance measured 1000.1 MHz against the "
+            "guest's 3257-3705, so wall-clock would understate the gap about "
+            "threefold. `cpu_hz` is measured as PMU cycles over steady_clock "
+            "seconds, so converting back cancels the wall clock instead of "
+            "trusting it.\n\n"
+            "`loop_overhead` is the control: the same empty loop, 2.0 cycles "
+            "on both sides. Every other row's difference is the hypervisor.\n\n"
+            + mtable.to_markdown(index=False, floatfmt=".1f") + "\n"
+        )
+        print(f"wrote {mout}")
     return 0
 
 
