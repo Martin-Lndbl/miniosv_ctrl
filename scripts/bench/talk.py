@@ -459,7 +459,7 @@ def primitives(out: Path) -> pd.DataFrame:
             if not d.empty:
                 stats[(machine, op)] = dict(
                     med=d.median(), lo=d.quantile(0.25), hi=d.quantile(0.75),
-                    boots=raw["boot"].nunique())
+                    boots=raw["boot"].nunique(), vals=d.to_numpy())
 
     machines = [m for m in VENDOR if all((m, op) in stats for op, _ in PRIMS)]
 
@@ -467,20 +467,31 @@ def primitives(out: Path) -> pd.DataFrame:
     width = 0.26
     x = np.arange(len(PRIMS))
 
-    for i, machine in enumerate(machines):
+    # Every repetition as a dot, over the median bar -- no error bar.
+    #
+    # An IQR whisker asserts one population with symmetric spread around a
+    # centre, and Graviton's write is not that: it alternates between ~2.25us
+    # and ~4.2us, roughly 2x apart, on a timescale of seconds. The whisker drew
+    # a bar at 4.1 reaching down to 2.3 and implied the truth was somewhere in
+    # between, which is the one value the operation never takes. The dots show
+    # two clusters because there are two clusters.
+    #
+    # It costs nothing on the stable bars: read and stop hold to under 1% and
+    # x86 write to under 1% within a boot, so their dots collapse into a line
+    # and say "no spread" as clearly as a whisker would have.
+    rng = np.random.default_rng(0)  # seeded: the jitter must not move between
+    for i, machine in enumerate(machines):  # regenerations of the same figure
+        pos = x + (i - (len(machines) - 1) / 2) * width
         vals = [stats[(machine, op)]["med"] for op, _ in PRIMS]
-        err = np.array([
-            [stats[(machine, op)]["med"] - stats[(machine, op)]["lo"]
-             for op, _ in PRIMS],
-            [stats[(machine, op)]["hi"] - stats[(machine, op)]["med"]
-             for op, _ in PRIMS],
-        ])
-        bars = ax.bar(x + (i - (len(machines) - 1) / 2) * width, vals, width,
-                      yerr=err, capsize=3, label=VENDOR[machine],
+        bars = ax.bar(pos, vals, width, label=VENDOR[machine],
                       color=MACHINE_PALETTE[i], hatch=HATCH[i],
-                      edgecolor="white",
-                      linewidth=0.8)
+                      edgecolor="white", linewidth=0.8)
         ax.bar_label(bars, fmt="%.1f", padding=2, fontsize=7.5)
+        for xi, (op, _) in zip(pos, PRIMS):
+            v = stats[(machine, op)]["vals"]
+            ax.scatter(xi + rng.uniform(-width * 0.28, width * 0.28, len(v)),
+                       v, s=5, c="#2b2b2b", alpha=0.5, linewidths=0,
+                       zorder=3)
 
     ax.set_xticks(x, [label for _, label in PRIMS])
     ax.set_ylabel("Wall-clock time per call (µs)")
@@ -496,8 +507,12 @@ def primitives(out: Path) -> pd.DataFrame:
     save(fig, out)
     plt.close(fig)
 
-    return pd.DataFrame([dict(machine=m, op=op, **stats[(m, op)])
-                         for m in machines for op, _ in PRIMS])
+    # `vals` is the per-rep array the dots are drawn from; it belongs to the
+    # figure, not to a table of one row per (machine, op).
+    return pd.DataFrame([
+        dict(machine=m, op=op,
+             **{k: v for k, v in stats[(m, op)].items() if k != "vals"})
+        for m in machines for op, _ in PRIMS])
 
 
 def main() -> int:
@@ -553,6 +568,17 @@ def main() -> int:
         "calls on one register, one read after, divided by N. Median and IQR "
         "over all reps of all boots. Under a hypervisor every counter access "
         "traps, so these are VM-exit costs, not instruction costs.\n\n"
+        "**Do not quote `med` for c7g.large `pmc_write`.** That measurement is "
+        "bimodal: over 8 boots and 40 repetitions, 21 land in a tight cluster "
+        "at 2.21-2.34us, 15 in another at 4.06-4.33, and 4 in between -- reps "
+        "that straddled a switch, since the cost alternates on a timescale of "
+        "seconds. With two clusters of near-equal mass the median reports "
+        "whichever one held the majority that day: it read 4.1 over the first "
+        "3 boots and 2.3 over all 8, and neither is a value the operation "
+        "spends much time at. The figure plots every repetition as a dot for "
+        "this reason. The effect is specific to writing a counter and to "
+        "aarch64 -- `pmc_read` and `pmc_stop` on the same boots hold to under "
+        "1%, and x86 `pmc_write` holds to under 1% within a boot.\n\n"
         + ptable.to_markdown(index=False, floatfmt=".2f") + "\n"
     )
     print(f"wrote {pout}")
