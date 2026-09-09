@@ -45,8 +45,9 @@ class DuckdbTpch(Bench):
         "sf": (None, str),  # boot arg -- scale factor, matches tpch/sf<N>/
         "workers": ("MININET_WORKERS", int),  # compiled in
         "conns": ("MININET_CONNS", int),  # compiled in
+        "tls": ("MININET_TLS", int),  # compiled in -- 0 dials plain HTTP:80
     }
-    defaults = {"query": 6, "sf": "1", "workers": 2, "conns": 8}
+    defaults = {"query": 6, "sf": "1", "workers": 2, "conns": 8, "tls": 1}
     instance_tag = "miniosv-loader-*"  # aws-deploy.py names every image this
     default_instance = "c7i.large"  # correctness + latency, not a throughput sweep
     max_vm_seconds = 300  # lineitem is 197 MiB at sf=1, no connection reuse yet (M3)
@@ -55,6 +56,7 @@ class DuckdbTpch(Bench):
     headline_unit = "ms"
 
     metrics = {
+        "scheme": (r"^tpch: sf=[\d.]+, \d+ quer\w+, bucket \S+ \((\w+)\)", str),
         "query_ms": (r"^Q\d+: ([\d.]+) ms,", float),
         "rows": (r"^Q\d+: [\d.]+ ms, (\d+) rows", int),
         "match": (r"^Q\d+: [\d.]+ ms, \d+ rows, match=(\w+)", str),
@@ -83,6 +85,7 @@ class DuckdbTpch(Bench):
             "MININET_ADDR": ip,
             "MININET_WORKERS": str(cfg["workers"]),
             "MININET_CONNS": str(cfg["conns"]),
+            "MININET_TLS": str(cfg["tls"]),
         }
         # Not `just build`: that coerces its `app` argument through
         # absolute_path(), which breaks the `app=duckdb` shorthand app/Makefile
