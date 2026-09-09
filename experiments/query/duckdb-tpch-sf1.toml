@@ -22,6 +22,11 @@ out      = "results/query/miniosv/tpch-sf1.csv"
 
 target_ip = ""
 
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+bar       = true
+
 [fixed]
 sf      = "1"
 workers = 2
