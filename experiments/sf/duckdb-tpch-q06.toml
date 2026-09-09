@@ -1,0 +1,44 @@
+name = "duckdb-tpch-q06"
+title = "DuckDB-on-miniOSv: Q06 latency vs TPC-H scale factor"
+description = """
+Q06 (single-table filter + sum over lineitem) at sf=0.01, 0.1 and 1 -- a
+~50x range in lineitem's size (60k rows at 0.01 up to 6M at sf=1) at fixed
+workers/conns/tls, to separate "cost that scales with data" from "cost that
+doesn't" (per-request round trips, connection setup). See the connection-reuse
+work in modules/mininet: at sf=1, Q06 alone makes 213 requests against one
+file, and that count -- not handshake cost -- is most of its latency.
+
+Requires all three scale factors' data on the bucket first:
+    just setup apps/bench/duckdb-tpch 0.01,0.1,1
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c7i.large"
+axis     = "sf"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 300
+out      = "results/sf/miniosv/tpch-q06.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+bar       = true
+
+[fixed]
+query   = 6
+workers = 2
+conns   = 8
+tls     = 1
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+[[points]]
+sf = "0.01"
+[[points]]
+sf = "0.1"
+[[points]]
+sf = "1"

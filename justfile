@@ -9,9 +9,10 @@ miniosv := justfile_directory() / "miniosv"
 default:
     @just --list
 
-# Run a bench's setup, e.g. 'just setup apps/bench/smoltcp-s3'
-setup app:
-    just --justfile "{{ absolute_path(app) }}/justfile" --working-directory "{{ absolute_path(app) }}" setup
+# Run a bench's setup, e.g. 'just setup apps/bench/smoltcp-s3', or
+# 'just setup apps/bench/duckdb-tpch 1,0.1' to forward a bench-specific arg
+setup app *args:
+    just --justfile "{{ absolute_path(app) }}/justfile" --working-directory "{{ absolute_path(app) }}" setup {{ args }}
 
 # Delete a bench's bucket and .env, e.g. 'just clean apps/bench/smoltcp-s3' ('force' skips the prompt)
 clean app *force:
