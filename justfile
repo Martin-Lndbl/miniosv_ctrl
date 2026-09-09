@@ -62,13 +62,3 @@ bench app *args:
         exit 1
     fi
     nix develop "{{ justfile_directory() }}#rust" --command python3 "$driver" "${@:2}"
-
-# Rerun the pmc-cost experiment end to end and replot it.
-#   just reproduce-pmc                          # 3 boots on all three vendors
-#   just reproduce-pmc 5 "c7i.large c8g.large"  # boots, machines
-reproduce-pmc *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    just --justfile "{{ justfile_directory() }}/apps/bench/pmc-cost/justfile" \
-        --working-directory "{{ justfile_directory() }}/apps/bench/pmc-cost" \
-        reproduce "$@"

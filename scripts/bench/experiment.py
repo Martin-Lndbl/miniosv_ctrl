@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -63,9 +64,10 @@ def find(name: str) -> Path:
 def load(name: str) -> dict:
     path = find(name)
     x = tomllib.loads(path.read_text()) | {"path": path}
-    # Misfiled means a sweep writing into another axis's results tree.
+    # Misfiled means a sweep writing into another axis's results tree. A
+    # deploy experiment has no axis of its own -- it just triggers others.
     group = path.parent.name
-    if path.is_relative_to(EXPERIMENTS) and group != x["axis"]:
+    if path.is_relative_to(EXPERIMENTS) and "axis" in x and group != x["axis"]:
         raise SystemExit(
             f"{qualified(path)} sweeps {x['axis']!r} but sits in {group}/ — "
             f"move it to experiments/{x['axis']}/ (and its `out` with it)"
@@ -94,9 +96,18 @@ def main() -> int:
     )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")
-    a = ap.parse_args()
+    # known-args, not parse_args: a deploy experiment forwards whatever
+    # follows straight to the bench's own justfile (e.g. boot count,
+    # machine list), which this script has no business validating.
+    a, extra = ap.parse_known_args()
 
     x = load(a.experiment)
+
+    if deploy := x.get("deploy"):
+        return remote(x, deploy, extra, a.dry_run)
+    if extra:
+        raise SystemExit(f"unexpected extra arguments: {extra}")
+
     out = ROOT / x["out"]
 
     if prep := x.get("prep"):
@@ -208,6 +219,22 @@ def run_plot(x: dict, out: Path) -> int:
             f"`just plot {out.relative_to(ROOT)}`",
             flush=True,
         )
+    return 0
+
+
+def remote(x: dict, deploy: str, extra: list[str], dry_run: bool) -> int:
+    """An experiment that spends real EC2 money: hands off to the bench's
+    own justfile, which owns its boot loop and replots itself when done."""
+    print(f"experiment : {qualified(x['path'])}\n{x['description'].strip()}\n")
+    bench_dir = ROOT / deploy
+    cmd = ["just", "--justfile", str(bench_dir / "justfile"),
+           "--working-directory", str(bench_dir), "reproduce", *extra]
+    print(f"$ {shlex.join(cmd)}")
+    if dry_run:
+        return 0
+    r = subprocess.run(cmd, cwd=ROOT)
+    if r.returncode:
+        raise SystemExit(f"deploy failed with {r.returncode}")
     return 0
 
 

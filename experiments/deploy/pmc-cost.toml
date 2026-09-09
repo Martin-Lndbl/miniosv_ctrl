@@ -1,0 +1,13 @@
+name = "pmc-cost"
+title = "PMC primitive-cost capture"
+description = """
+Boots the pmc-cost bench on Intel/AMD/Graviton, N times each, then replots
+pmc-primitives and pmc-metal from the captures. The one experiment here that
+spends real EC2 money -- everything else replays already-captured data or
+runs a local sweep driver.
+
+    just reproduce pmc-cost                          # 3 boots on all three vendors
+    just reproduce pmc-cost 5 "c7i.large c8g.large"  # boots, machines
+"""
+
+deploy = "apps/bench/pmc-cost"
