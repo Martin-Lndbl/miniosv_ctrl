@@ -124,6 +124,12 @@ class Bench:
     instance_tag: str = ""  # EC2 Name tag, for stray cleanup
     default_instance: str = "c6in.8xlarge"
     max_vm_seconds: int = 110  # money guard: billing starts at launch
+    # The final summary line's "best" figure: which column, which direction
+    # counts as better, and its unit. Throughput benches want the max Gbps;
+    # a latency bench like duckdb-tpch wants the min ms.
+    headline_metric: str = "gbps"
+    headline_agg: str = "max"  # "max" or "min"
+    headline_unit: str = "Gbps"
 
     def add_arguments(self, ap: argparse.ArgumentParser) -> None:
         pass
@@ -133,6 +139,19 @@ class Bench:
 
     def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
         raise NotImplementedError
+
+    def summary(self, row: dict) -> str:
+        """One-line human summary of a run, for the console and push
+        notifications. The default is throughput-shaped (smoltcp-s3,
+        linux-s3); a bench whose headline numbers aren't Gbps/workers/conns
+        (duckdb-tpch's are ms/rows/match) should override this."""
+        s = (
+            f"{row.get('gbps')} Gbps, {row.get('workers_actual')} workers, "
+            f"{row.get('conns_clean')}/{row.get('conns_total')} clean"
+        )
+        if row.get("setup_ms") is not None:
+            s += f", setup {row['setup_ms']} ms"
+        return s
 
     # -- shared -------------------------------------------------------------
 
@@ -327,14 +346,10 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
 
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         df.to_csv(out, index=False)  # a partial sweep survives interruption
-        print(
-            f"  {row.get('gbps')} Gbps, {row.get('workers_actual')} workers, "
-            f"{row.get('conns_clean')}/{row.get('conns_total')} clean, "
-            f"valid={row['valid']}"
-        )
+        summary = bench.summary(row)
+        print(f"  {summary}, valid={row['valid']}")
         notify(
-            f"{row.get('gbps')} Gbps | {row.get('conns_clean')}/"
-            f"{row.get('conns_total')} clean | setup {row.get('setup_ms')} ms",
+            summary,
             title=f"[{idx + 1}/{len(plan)}] {axis}={value} rep {rep} "
             f"{'OK' if row['valid'] else 'INVALID'}",
             tags="white_check_mark" if row["valid"] else "warning",
@@ -342,8 +357,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
 
         if not row["valid"] and not a.keep_going:
             msg = (
-                f"{axis}={value} rep={rep} invalid "
-                f"({row.get('conns_clean')}/{row.get('conns_total')} clean, "
+                f"{axis}={value} rep={rep} invalid ({summary}, "
                 f"complete={row.get('complete')}); abandoning "
                 f"{len(plan) - idx - 1} queued runs"
             )
@@ -353,9 +367,14 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
 
     ran = df[df["axis"] == axis] if "axis" in df else df
     good = ran[ran["valid"] == True] if "valid" in ran else ran  # noqa: E712
-    best = f"{good['gbps'].max():.1f}" if len(good) else "n/a"
+    if len(good) and bench.headline_metric in good:
+        agg = getattr(good[bench.headline_metric], bench.headline_agg)()
+        best = f"{agg:.1f}"
+    else:
+        best = "n/a"
     where = ", ".join(values) if axis == INSTANCE_AXIS else a.instance
-    print(f"\n{len(ran)} runs on {where}, {len(good)} valid, best {best} Gbps")
+    print(f"\n{len(ran)} runs on {where}, {len(good)} valid, "
+          f"best {best} {bench.headline_unit}")
     print(f"wrote {out} ({len(df)} rows)")
     return 0
 
