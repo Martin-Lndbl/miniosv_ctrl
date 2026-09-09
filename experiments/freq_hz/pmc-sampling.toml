@@ -1,0 +1,17 @@
+name = "pmc-sampling"
+title = "Sampling overhead"
+description = """
+Percent slowdown of the sampled run over the unsampled baseline, against the
+requested sampling frequency. miniOSv, stock Linux, and Linux with perf's
+rate throttling disabled (a separate series, since stock is what a user
+actually gets), on whichever machines have a capture.
+"""
+
+axis  = "freq_hz"
+prep  = "sampling"
+out   = "results/pmc-sample/sampling.csv"
+
+series    = "series"
+value_col = "value"
+ylabel    = "Overhead over baseline (%)"
+unit      = "%"

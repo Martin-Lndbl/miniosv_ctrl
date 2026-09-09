@@ -97,8 +97,12 @@ def main() -> int:
     a = ap.parse_args()
 
     x = load(a.experiment)
-    axis, points = x["axis"], x["points"]
     out = ROOT / x["out"]
+
+    if prep := x.get("prep"):
+        return local(x, prep, out, a.dry_run, a.no_plot)
+
+    axis, points = x["axis"], x["points"]
     driver = ROOT / "scripts/bench" / Path(x["bench"]).name / "bench.py"
     # Between reps (runner's own) and between points (here); the latter
     # already absorbs a rebuild, so they need not be equal.
@@ -182,17 +186,22 @@ def main() -> int:
 
     if a.dry_run or a.no_plot:
         return 0
-    # Loud but not fatal: the runs are already in the CSV.
-    r = subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "scripts/bench/plot.py"),
-            str(out),
-            "--title",
-            x["title"],
-        ],
-        cwd=ROOT,
-    )
+    return run_plot(x, out)
+
+
+def run_plot(x: dict, out: Path) -> int:
+    cmd = [sys.executable, str(ROOT / "scripts/bench/plot.py"), str(out),
+           "--title", x["title"]]
+    for key, flag in (("series", "--series"), ("value_col", "--value-col"),
+                       ("ylabel", "--ylabel"), ("unit", "--unit")):
+        if key in x:
+            cmd += [flag, str(x[key])]
+    for key, flag in (("bar", "--bar"), ("log_scale", "--log-scale")):
+        if x.get(key):
+            cmd.append(flag)
+    # Loud but not fatal: the runs (or, for a local experiment, the prepped
+    # CSV) are already on disk.
+    r = subprocess.run(cmd, cwd=ROOT)
     if r.returncode:
         print(
             f"WARN: data is in {out} but plotting failed; rerun with "
@@ -200,6 +209,26 @@ def main() -> int:
             flush=True,
         )
     return 0
+
+
+def local(x: dict, prep: str, out: Path, dry_run: bool, no_plot: bool) -> int:
+    """An experiment that reshapes already-captured results rather than
+    running a new sweep: no AWS env, no deploy, no target IP -- just
+    prep -> plot, same as the tail of a real sweep."""
+    print(f"experiment : {qualified(x['path'])}\n{x['description'].strip()}\n")
+    print(f"prep       : {prep}\nout        : {out}")
+    if dry_run:
+        return 0
+    r = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/bench/pmc-prep.py"), prep,
+         "--out", str(out)],
+        cwd=ROOT,
+    )
+    if r.returncode:
+        raise SystemExit(f"prep {prep!r} failed with {r.returncode}")
+    if no_plot:
+        return 0
+    return run_plot(x, out)
 
 
 if __name__ == "__main__":

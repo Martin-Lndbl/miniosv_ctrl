@@ -1,0 +1,22 @@
+name = "pmc-metal"
+title = "Counter access with and without a hypervisor, on x86"
+description = """
+The same primitives with no hypervisor underneath. Cycles rather than
+nanoseconds because nothing manages P-states on bare metal -- the metal
+instance runs at ~1.0GHz against the guest's ~3.3GHz, so wall-clock would
+mostly say that. c7i.metal-24xl against c7i.large: same Sapphire Rapids
+core, same kernel, same image; only the hypervisor differs.
+"""
+
+axis  = "op"
+prep  = "metal"
+out   = "results/pmc-cost/metal.csv"
+
+series    = "series"
+value_col = "value"
+ylabel    = "Cycles per call"
+unit      = "cycles"
+bar       = true
+# 69 cycles bare-metal against 8,770 virtualized -- on a linear axis the
+# bare-metal series would sit on the floor as an indistinguishable sliver.
+log_scale = true

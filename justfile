@@ -43,7 +43,7 @@ experiments:
         | xargs grep -H '^title' \
         | sed 's|.*/experiments/||; s|\.toml:title *= *"| — |; s|"$||'
 
-# Plot a sweep ('just plot smoltcp-s3'), or 'just plot talk' for the fixed IDP talk figures
+# Plot a sweep CSV, e.g. 'just plot smoltcp-s3' or 'just plot results/x/sweep.csv --dark'
 plot csv *args:
     #!/usr/bin/env bash
     set -euo pipefail

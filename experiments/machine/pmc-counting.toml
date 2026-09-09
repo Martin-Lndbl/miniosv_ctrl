@@ -1,0 +1,19 @@
+name = "pmc-counting"
+title = "PerfEvent overhead with 2 counters"
+description = """
+Added time per measured region, miniOSv against Linux, on whichever machines
+have a capture for both. Two counters because Nitro grants a guest only 2 on
+Graviton (measured on c7g.large and c8g.large alike) against 8 on c7i and 5
+on c7a -- 2 is the largest count every target serves without perf
+multiplexing, which is what makes the bars comparable across machines.
+"""
+
+axis  = "machine"
+prep  = "counting"
+out   = "results/pmc-perfevent/counting.csv"
+
+series    = "series"
+value_col = "value"
+ylabel    = "Added time per measured region (µs)"
+unit      = "µs"
+bar       = true

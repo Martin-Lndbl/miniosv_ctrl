@@ -1,0 +1,19 @@
+name = "pmc-primitives"
+title = "Low-level primitive cost"
+description = """
+Wall-clock microseconds per call, one steady_clock read around N identical
+calls on one register, divided by N. Under a hypervisor every counter access
+traps, so these are VM-exit costs, not instruction costs. Intel, AMD and
+Graviton 3 (c7i/c7a/c7g.large), the only three with a capture for every
+primitive.
+"""
+
+axis  = "op"
+prep  = "primitives"
+out   = "results/pmc-cost/primitives.csv"
+
+series    = "series"
+value_col = "value"
+ylabel    = "Wall-clock time per call (µs)"
+unit      = "µs"
+bar       = true
