@@ -43,7 +43,7 @@ experiments:
         | xargs grep -H '^title' \
         | sed 's|.*/experiments/||; s|\.toml:title *= *"| — |; s|"$||'
 
-# Plot a sweep, e.g. 'just plot smoltcp-s3' or 'just plot results/x/sweep-workers.csv'
+# Plot a sweep ('just plot smoltcp-s3'), or 'just plot talk' for the fixed IDP talk figures
 plot csv *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -72,10 +72,3 @@ reproduce-pmc *args:
     just --justfile "{{ justfile_directory() }}/apps/bench/pmc-cost/justfile" \
         --working-directory "{{ justfile_directory() }}/apps/bench/pmc-cost" \
         reproduce "$@"
-
-# The evaluation figures for the talk (stock matplotlib, no theme)
-plot-talk *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    nix develop "{{ justfile_directory() }}#rust" --command python3 \
-        "{{ justfile_directory() }}/scripts/bench/talk.py" "$@"
