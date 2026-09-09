@@ -219,13 +219,12 @@ def plot(
             ax.bar(pos, g["mean"], width, yerr=err, capsize=3, color=col,
                    hatch=HATCH[shape % len(HATCH)],
                    edgecolor=c["surface"], linewidth=0.8, label=name, zorder=3)
-            # At the bar's own top, not bar_label's default (bar + yerr),
-            # which would float the number above the whisker.
-            for xi, v in zip(pos, g["mean"]):
-                ax.text(xi, v, f"{v:.1f}", ha="center", va="bottom",
-                        fontsize=7.5, zorder=4, color=c["text"],
-                        bbox=dict(facecolor=c["surface"], edgecolor="none",
-                                  alpha=0.85, pad=0.8))
+            # Above the whisker, not the bar: a points offset (not a data
+            # one) so the gap stays constant regardless of the bar's own
+            # scale, the same mechanism the single-series peak label uses.
+            for xi, v, hi in zip(pos, g["mean"], g["hi"]):
+                ax.annotate(f"{v:.1f}", (xi, hi), textcoords="offset points",
+                            xytext=(0, 3), ha="center", fontsize=7.5, zorder=4)
     else:
         for i, (name, g) in enumerate(groups):
             col = c["series"][i % n_hue]
