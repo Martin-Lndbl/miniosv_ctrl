@@ -1,0 +1,76 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# The root .env, shared with apps/bench/duckdb-tpch: same bucket, same TPC-H
+# data, same VPC gateway endpoint. This bench adds one more grant to it.
+env_file := parent_directory(parent_directory(justfile_directory())) / ".env"
+bin_prefix := "bin/duckdb-linux"
+duckdb_version := "1.5.5"
+
+# List available recipes
+default:
+    @just --list
+
+# Fetch the official duckdb CLI + httpfs extension (linux_amd64_musl, so it
+# needs no libc match on the instance) and upload them, unsigned via the VPCE
+setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    env_file="{{ env_file }}"
+    if [ ! -f "$env_file" ]; then
+        echo "no $env_file -- run 'just setup apps/bench/duckdb-tpch' first." >&2
+        echo "That recipe owns the bucket and the TPC-H data; this one only" >&2
+        echo "adds a duckdb binary to the same bucket." >&2
+        exit 1
+    fi
+    set -a; . "$env_file"; set +a
+
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir"' EXIT
+
+    # Not the "-musl" release: that one is dynamically linked against musl's
+    # own loader (/lib/ld-musl-x86_64.so.1), which a glibc distro like AL2023
+    # does not have -- exec then fails ENOENT, confusingly against the
+    # binary's own path rather than the missing interpreter's. Plain
+    # linux-amd64 links against the glibc AL2023 actually ships.
+    echo "fetching duckdb {{ duckdb_version }} (linux_amd64, glibc)"
+    curl -sL "https://github.com/duckdb/duckdb/releases/download/v{{ duckdb_version }}/duckdb_cli-linux-amd64.gz" \
+        | gunzip > "$tmpdir/duckdb"
+    chmod +x "$tmpdir/duckdb"
+
+    echo "fetching httpfs extension for the same platform/version"
+    curl -sL "http://extensions.duckdb.org/v{{ duckdb_version }}/linux_amd64/httpfs.duckdb_extension.gz" \
+        | gunzip > "$tmpdir/httpfs.duckdb_extension"
+
+    echo "uploading to s3://$AWS_BUCKET/{{ bin_prefix }}/"
+    aws s3 cp "$tmpdir/duckdb" "s3://$AWS_BUCKET/{{ bin_prefix }}/duckdb" --only-show-errors
+    aws s3 cp "$tmpdir/httpfs.duckdb_extension" \
+        "s3://$AWS_BUCKET/{{ bin_prefix }}/httpfs.duckdb_extension" --only-show-errors
+
+    vpce=$(aws ec2 describe-vpc-endpoints \
+        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
+                  "Name=vpc-endpoint-type,Values=Gateway" \
+        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
+    if [ -z "$vpce" ] || [ "$vpce" = "None" ]; then
+        echo "no S3 gateway endpoint in $AWS_REGION -- run 'just setup apps/bench/smoltcp-s3' first" >&2
+        exit 1
+    fi
+
+    # Merged by Sid, same as every other bench sharing this bucket.
+    AWS_BUCKET="$AWS_BUCKET" python3 "{{ justfile_directory() }}/../../scripts/bucket_policy.py" \
+        add --sid DuckdbLinuxBinFromVpce --vpce "$vpce" \
+        --resource "arn:aws:s3:::$AWS_BUCKET/{{ bin_prefix }}/*"
+
+    echo
+    echo "duckdb-linux ready:"
+    echo "  s3://$AWS_BUCKET/{{ bin_prefix }}/duckdb"
+    echo "  s3://$AWS_BUCKET/{{ bin_prefix }}/httpfs.duckdb_extension"
+
+# Remove this bench's objects and its bucket-policy grant (not the bucket)
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -a; . "{{ env_file }}"; set +a
+    aws s3 rm "s3://$AWS_BUCKET/{{ bin_prefix }}/" --recursive
+    AWS_BUCKET="$AWS_BUCKET" python3 "{{ justfile_directory() }}/../../scripts/bucket_policy.py" \
+        remove --sid DuckdbLinuxBinFromVpce
