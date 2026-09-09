@@ -62,8 +62,12 @@ class DuckdbLinux(Bench):
     knobs = {
         "query": (None, int),
         "sf": (None, str),
+        # An S3 address to pin the bucket name to, or "" to resolve normally.
+        # miniOSv compiles in one address; this makes Linux ask the same
+        # question instead of spreading over whatever DNS returns.
+        "pin": (None, str),
     }
-    defaults = {"query": 6, "sf": "1"}
+    defaults = {"query": 6, "sf": "1", "pin": ""}
     instance_tag = "duckdb-linux-bench"
     default_instance = "c7i.large"  # matches apps/bench/duckdb-tpch's default
     max_vm_seconds = 300
@@ -71,7 +75,7 @@ class DuckdbLinux(Bench):
     headline_agg = "min"
     headline_unit = "ms"
 
-    metrics = {
+    metrics = {"pinned_ip": (r"^pinned \S+ -> ([\d.]+)", str)} | {
         "query_ms": (r"^Q\d+: ([\d.]+) ms,", float),
         "rows": (r"^Q\d+: [\d.]+ ms, (\d+) rows", int),
         "match": (r"^Q\d+: [\d.]+ ms, \d+ rows, match=(\w+)", str),
@@ -121,6 +125,7 @@ class DuckdbLinux(Bench):
             "AWS_REGION": os.environ["AWS_REGION"],
             "BENCH_SF": str(cfg["sf"]),
             "BENCH_QUERIES": str(cfg["query"]),
+            "BENCH_PIN_IP": str(cfg.get("pin") or ""),
         }
         body = (SCRIPTS / "instance.py").read_text()
         body = body.split("\n", 1)[1] if body.startswith("#!") else body

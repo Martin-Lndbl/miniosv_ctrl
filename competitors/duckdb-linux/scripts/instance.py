@@ -54,7 +54,19 @@ def say(text=""):
 LOCAL = cfg("BENCH_LOCAL", "0") == "1"
 WORK = cfg("BENCH_WORK", "/run")
 BUCKET, REGION = cfg("AWS_BUCKET"), cfg("AWS_REGION")
-ENDPOINT = "https://{}.s3.{}.amazonaws.com".format(BUCKET, REGION)
+HOST = "{}.s3.{}.amazonaws.com".format(BUCKET, REGION)
+ENDPOINT = "https://{}".format(HOST)
+
+# Pin the bucket to one S3 front-end, the way a mininet image is built: it
+# compiles in a single address and every connection dials it. DuckDB here
+# resolves the name normally and may spread its connections over whatever
+# DNS hands back, so without this the two sides are not asking the same
+# question. Empty means "resolve normally".
+PIN_IP = cfg("BENCH_PIN_IP")
+if PIN_IP:
+    with open("/etc/hosts", "a") as fh:
+        fh.write("\n{} {}\n".format(PIN_IP, HOST))
+    say("pinned {} -> {}".format(HOST, PIN_IP))
 SF = cfg("BENCH_SF", "1")
 QUERIES = [int(x) for x in cfg("BENCH_QUERIES", "6").split(",") if x.strip()]
 
