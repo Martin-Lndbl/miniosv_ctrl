@@ -141,9 +141,9 @@ def main() -> int:
     # Searched, not anchored: cloud-init stamps every console line with
     # "[    6.71] cloud-init[2345]: ", so a row never starts the line.
     # Comma-separated, one CSV per tag: a benchmark may emit more than one
-    # block per run with different schemas -- pmc-precision writes both
-    # per-rep attribution counts and a pooled skid histogram -- and merging
-    # them into one file would produce a CSV with two headers.
+    # block per run with different schemas, and merging them into one file
+    # would produce a CSV with two headers. Every benchmark here currently
+    # emits a single tag; the split exists for the ones that will not.
     tags = [t for t in (t.strip() for t in a.csv_tag.split(",")) if t]
     missing = []
     for tag in tags:

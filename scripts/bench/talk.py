@@ -44,8 +44,11 @@ HATCH = ["", "//", "xx"]
 # Blue and orange mean miniOSv and Linux, in every figure of the evaluation
 # section that has an OS axis. That only works if nothing else claims them:
 # pmc-cost is miniOSv-only and its bars separate machines, not systems, so
-# reusing slot 0 and 1 there would have taught the audience a colour code on
-# one slide and contradicted it on the next.
+# reusing slot 0 and 1 there would teach the audience a colour code on one
+# slide and contradict it on the next -- primitives() follows that rule.
+# metal() is the deliberate exception: it uses PALETTE instead, for visual
+# consistency with the rest of the deck, even though its bars split by
+# hypervisor rather than by OS.
 #
 # Violet/teal/slate, chosen to sit outside both reserved hue families -- no
 # brown, which reads as a dark orange. Pitched at roughly the tint of the blue
@@ -440,10 +443,10 @@ def sampling(out: Path) -> pd.DataFrame:
 # between two machines is that they tick at different rates. cycles_per_op is
 # still in primitives.md for anyone who wants the normalised view.
 PRIMS = [
-    ("pmc_start_with_conf", "start"),
-    ("pmc_read", "read"),
-    ("pmc_write", "write"),
-    ("pmc_stop", "stop"),
+    ("pmc_start_with_conf", "pmc_start_with_conf()"),
+    ("pmc_read", "pmc_read()"),
+    ("pmc_write", "pmc_write()"),
+    ("pmc_stop", "pmc_stop()"),
 ]
 
 
@@ -530,9 +533,13 @@ def primitives(out: Path) -> pd.DataFrame:
 # (PMU cycles / steady_clock seconds), so ns/op * cpu_hz collapses to cycles/op
 # and the wall clock cancels rather than being trusted.
 #
-# The control is loop_overhead: the same empty loop, 2.0 cycles on both sides.
-# It is plotted for that reason and no other -- if virtualization were leaking
-# into the measurement, it would show there first.
+# loop_overhead is not plotted. It is the control -- the same empty loop costs
+# 2.0 cycles on both sides, which is what says the cycle normalisation is sound
+# and that any difference in the other bars is the hypervisor rather than the
+# measurement. But on a slide it is a bar the audience has to be told to
+# ignore, and at 2 cycles against 8,770 it also sets the log axis three decades
+# lower than the data needs. It stays in metal.md, where a reader checking the
+# method will look for it.
 #
 # Both sides run the identical image (same kernel, same benchmark, same legacy
 # BIOS boot path) on the same microarchitecture: c7i.metal-24xl against
@@ -540,12 +547,14 @@ def primitives(out: Path) -> pd.DataFrame:
 # used -- Skylake-SP, which would have confounded "no hypervisor" with a change
 # of core.
 METAL_PRIMS = [
-    ("loop_overhead", "empty loop"),
-    ("pmc_read", "read"),
-    ("pmc_write", "write"),
-    ("pmc_start_with_conf", "start"),
-    ("pmc_stop", "stop"),
+    ("pmc_start_with_conf", "pmc_start_with_conf()"),
+    ("pmc_read", "pmc_read()"),
+    ("pmc_write", "pmc_write()"),
+    ("pmc_stop", "pmc_stop()"),
 ]
+
+# Kept out of the figure but still reported in the table.
+METAL_CONTROL = ("loop_overhead", "empty loop")
 
 
 def metal(out: Path) -> pd.DataFrame:
@@ -586,17 +595,17 @@ def metal(out: Path) -> pd.DataFrame:
         lo = [float(np.quantile(vals[op], 0.25)) for op, _ in METAL_PRIMS]
         hi = [float(np.quantile(vals[op], 0.75)) for op, _ in METAL_PRIMS]
         err = np.array([np.subtract(med, lo), np.subtract(hi, med)])
-        # Not PALETTE: blue and orange mean miniOSv and Linux everywhere in
-        # this section, and both bars here are miniOSv -- the axis is the
-        # hypervisor. Reusing them would teach one colour code on this slide
-        # and contradict it on the next.
+        # PALETTE, not MACHINE_PALETTE: blue and orange mean miniOSv and Linux
+        # elsewhere in this section, and both bars here are miniOSv -- the
+        # axis is the hypervisor, not the OS -- but blue/orange was chosen
+        # here anyway for consistency with the rest of the deck's look.
         #
         # No clock in the label. The axis is cycles, which already divides the
         # clock out, so quoting 1.0GHz against 3.3GHz only invited the question
         # of why they differ -- which this figure does not answer and does not
         # depend on. The clocks stay in metal.md.
         ax.bar(pos, med, width, yerr=err, capsize=4, label=label,
-               color=MACHINE_PALETTE[i], hatch=HATCH[i], edgecolor="white",
+               color=PALETTE[i], hatch=HATCH[i], edgecolor="white",
                linewidth=0.8)
         for xi, v in zip(pos, med):
             ax.text(xi, v, f"{v:,.0f}" if v >= 10 else f"{v:.1f}",
@@ -605,15 +614,29 @@ def metal(out: Path) -> pd.DataFrame:
                               alpha=0.75, pad=0.8))
         for (op, _), m in zip(METAL_PRIMS, med):
             rows.append(dict(side=label, op=op, cycles=m))
+        # The control, reported but not drawn.
+        ctrl = METAL_CONTROL[0]
+        if ctrl in vals:
+            rows.append(dict(side=label, op=ctrl,
+                             cycles=float(np.median(vals[ctrl]))))
 
-    # Log scale: an empty loop is 2 cycles and a virtualized write is 8085, so
-    # on a linear axis every bare-metal bar would be a line on the floor.
+    # Log scale: 69 cycles for a bare-metal read against 8,770 for a
+    # virtualized write is 127x, and on a linear axis the whole bare-metal
+    # series would sit on the floor as four indistinguishable slivers.
     ax.set_yscale("log")
     ax.set_xticks(x, [lab for _, lab in METAL_PRIMS])
     ax.set_ylabel("Cycles per call")
-    ax.set_title("Counter access with and without a hypervisor")
+    # "on x86": both sides are Sapphire Rapids, and there is no aarch64
+    # counterpart -- AWS sells no Graviton metal instance, so this comparison
+    # cannot be drawn there at all.
+    ax.set_title("Counter access with and without a hypervisor, on x86")
     ax.grid(True, axis="y", alpha=0.3)
     ax.set_axisbelow(True)
+    # Headroom before the legend, not after: dropping the 2-cycle control bar
+    # raised the axis floor, and the upper-left legend landed on the first
+    # virtualized bar's value label. Half a decade above the tallest bar clears
+    # it without moving the legend somewhere the eye has to hunt for.
+    ax.set_ylim(top=max(r["cycles"] for r in rows) * 3)
     ax.legend(loc="upper left")
     fig.tight_layout()
     save(fig, out)
@@ -705,7 +728,10 @@ def main() -> int:
             "seconds, so converting back cancels the wall clock instead of "
             "trusting it.\n\n"
             "`loop_overhead` is the control: the same empty loop, 2.0 cycles "
-            "on both sides. Every other row's difference is the hypervisor.\n\n"
+            "on both sides. Every other row's difference is the hypervisor. It "
+            "is listed here but kept off the figure -- on a slide it is a bar "
+            "the audience has to be told to ignore, and it drags the log axis "
+            "three decades below the data.\n\n"
             + mtable.to_markdown(index=False, floatfmt=".1f") + "\n"
         )
         print(f"wrote {mout}")
