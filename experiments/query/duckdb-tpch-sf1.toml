@@ -1,0 +1,44 @@
+name = "duckdb-tpch-sf1"
+title = "DuckDB-on-miniOSv: TPC-H query latency over mininet+httpfs, sf=1"
+description = """
+Correctness and latency for a spread of TPC-H queries -- a single-table scan
+(Q06), a few joins (Q03, Q10, Q18), a multi-join aggregate (Q05), and the
+full-table aggregate (Q01) -- read straight off S3 as parquet, through
+httpfs's MininetHTTPClient (see PLAN_duckdb_net.md). No connection reuse yet
+(M3): every range read pays its own TLS handshake, so this is also a
+measurement of that cost, not just query-plan cost.
+
+Each result is checked against the tpch extension's own canned answers for
+sf=1 (extension/tpch/dbgen/dbgen.cpp); `match` in the CSV says whether it did.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c7i.large"
+axis     = "query"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 300
+out      = "results/query/miniosv/tpch-sf1.csv"
+
+target_ip = ""
+
+[fixed]
+sf      = "1"
+workers = 2
+conns   = 8
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+[[points]]
+query = 1
+[[points]]
+query = 3
+[[points]]
+query = 5
+[[points]]
+query = 6
+[[points]]
+query = 10
+[[points]]
+query = 18
