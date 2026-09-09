@@ -23,12 +23,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-# Series slots are assigned in fixed order, never cycled. Blue/orange/green
-# rather than matplotlib's tab10 blue/orange/green -- these three were
-# checked with a CVD simulator (worst adjacent pair dE 9.2 deuteranopia, 27.6
-# normal vision), where tab10's green-against-orange is the classic red-green
-# confusion. Colour still isn't the only channel a series is carried on: see
-# MARKERS/DASHES for line plots and HATCH for bar plots below.
+# Fixed slots, never cycled. Checked with a CVD simulator (tab10's default
+# green-on-orange is the classic red-green confusion).
 INK = {
     "light": dict(surface="#fcfcfb", text="#0b0b0b", muted="#898781",
                   grid="#e1e0d9", axis="#c3c2b7", bad="#d03b3b",
@@ -38,12 +34,9 @@ INK = {
                  series=["#3987e5", "#d95926", "#199e70"]),
 }
 
-# Shape, not just hue: a marker and a dash pattern per series slot, so two
-# lines are still distinguishable in greyscale or to someone who can't
-# separate the hues at all.
+# Shape, not just hue, so a series still reads in greyscale.
 MARKERS = ["o", "s", "^"]
 DASHES = ["-", "--", ":"]
-# Same idea for bars: a hatch per series slot alongside its colour.
 HATCH = ["", "//", "xx"]
 
 
@@ -74,10 +67,7 @@ LABELS = {
     "instance": "EC2 instance size",
 }
 
-# EC2's sustained (baseline) allowance in Gbps, from describe-instance-types.
-# Sizes at 4xlarge and below can burst well above this on network credits, so a
-# short run there measures burst, not what the machine sustains. Only means
-# anything against a throughput axis, so it is gated on value_col == "gbps".
+# EC2's sustained (non-burst) allowance in Gbps, from describe-instance-types.
 CEILING = {
     "c6in.large": 3.125,
     "c6in.xlarge": 6.25,
@@ -99,11 +89,8 @@ def numeric(v) -> bool:
 
 
 def rank(axis: str, v, order: dict | None = None) -> float:
-    """Sort key. Instance sizes sort by machine, not alphabetically, so
-    16xlarge lands after 2xlarge rather than before it. A numeric axis value
-    sorts by its number; a non-numeric one (a primitive's name, an OS's name)
-    has no natural order of its own, so it keeps the order it first appeared
-    in the CSV."""
+    """Sort key: instance sizes by machine size, numbers by value, anything
+    else by first appearance in the CSV."""
     if axis == "instance":
         size = str(v).rsplit(".", 1)[-1]
         if size == "large":
@@ -153,11 +140,7 @@ def plot(
     order = sorted(stats["axis_value"].unique(),
                     key=lambda v: rank(axis, v, {v: i for i, v in
                                                   enumerate(dict.fromkeys(df["axis_value"]))}))
-    # Named axes -- instance sizes, primitive names, OS names -- are placed
-    # evenly and labelled, rather than pretending the gaps between them mean
-    # something the way a numeric axis's gaps do. Bars are grouped by that
-    # same evenly-spaced position, so a bar plot forces it even when the
-    # axis happens to be numeric.
+    # Named axes (categories, or any bar chart) are placed evenly, not by value.
     named = bar or axis == "instance" or not all(numeric(v) for v in order)
     at = {v: i for i, v in enumerate(order)}
     xof = (lambda col: col.map(at)) if named else (lambda col: col)
@@ -173,9 +156,7 @@ def plot(
     ceiling = None
     if value_col == "gbps":
         if named:
-            # Every point has its own allowance, so the ceiling is a line, not
-            # a level. Dashed because it is a threshold rather than measured
-            # data.
+            # Each point has its own allowance, so the ceiling is a line.
             ceilings = [CEILING.get(v) for v in order]
             ceiling = max([x for x in ceilings if x], default=0) or None
             if any(ceilings):
@@ -192,7 +173,6 @@ def plot(
         else:
             ceiling = CEILING.get(instance)
             if ceiling:
-                # A threshold, so dashing carries meaning rather than noise.
                 ax.axhline(ceiling, color=c["muted"], lw=1, ls=(0, (5, 4)), zorder=1)
                 ax.annotate(
                     f"{instance} sustained, {ceiling:g} Gbps",
@@ -205,9 +185,8 @@ def plot(
                     color=c["muted"],
                 )
 
-    # Latin square: hue = i % n, shape = (i + i//n) % n. Every series gets a
-    # distinct shape within the first n, and any later series that repeats a
-    # hue never repeats that hue's earlier shape too.
+    # Latin square (hue = i%n, shape = (i+i//n)%n): a repeated hue never
+    # repeats its earlier shape.
     n_hue = len(c["series"])
     if bar:
         width = 0.8 / len(groups)
@@ -219,9 +198,8 @@ def plot(
             ax.bar(pos, g["mean"], width, yerr=err, capsize=3, color=col,
                    hatch=HATCH[shape % len(HATCH)],
                    edgecolor=c["surface"], linewidth=0.8, label=name, zorder=3)
-            # Above the whisker, not the bar: a points offset (not a data
-            # one) so the gap stays constant regardless of the bar's own
-            # scale, the same mechanism the single-series peak label uses.
+            # Above the whisker (hi), not the bar -- else the label sits
+            # inside the yerr line.
             for xi, v, hi in zip(pos, g["mean"], g["hi"]):
                 ax.annotate(f"{v:.1f}", (xi, hi), textcoords="offset points",
                             xytext=(0, 3), ha="center", fontsize=7.5, zorder=4)
@@ -287,8 +265,6 @@ def plot(
     ax.minorticks_off()
     ax.margins(x=0.06)  # room for the end labels
     if log_scale:
-        # For values spanning orders of magnitude -- a linear axis would
-        # leave the smallest series as an indistinguishable sliver near zero.
         ax.set_yscale("log")
     else:
         # Anchored at zero: cropping a magnitude's baseline exaggerates slope.
@@ -311,15 +287,10 @@ def plot(
         color=c["muted"],
     )
 
-    if series_col or len(bad) or named:
-        # loc="best" scores candidate corners by data overlap and picks the
-        # least-bad one; an opaque background (see rc()) means it staying
-        # legible no longer depends on it finding a totally empty one.
+    if ax.get_legend_handles_labels()[0]:
         ax.legend(labelcolor=c["text"])
 
     fig.tight_layout()
-    # bbox_inches="tight": the legend now lives outside the axes, and a plain
-    # tight_layout() doesn't know to leave room for it.
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
 

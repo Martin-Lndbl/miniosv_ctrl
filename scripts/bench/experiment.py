@@ -64,8 +64,7 @@ def find(name: str) -> Path:
 def load(name: str) -> dict:
     path = find(name)
     x = tomllib.loads(path.read_text()) | {"path": path}
-    # Misfiled means a sweep writing into another axis's results tree. A
-    # deploy experiment has no axis of its own -- it just triggers others.
+    # A deploy experiment has no axis of its own.
     group = path.parent.name
     if path.is_relative_to(EXPERIMENTS) and "axis" in x and group != x["axis"]:
         raise SystemExit(
@@ -96,9 +95,7 @@ def main() -> int:
     )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")
-    # known-args, not parse_args: a deploy experiment forwards whatever
-    # follows straight to the bench's own justfile (e.g. boot count,
-    # machine list), which this script has no business validating.
+    # A deploy experiment forwards extra args straight to its own justfile.
     a, extra = ap.parse_known_args()
 
     x = load(a.experiment)
@@ -210,8 +207,7 @@ def run_plot(x: dict, out: Path) -> int:
     for key, flag in (("bar", "--bar"), ("log_scale", "--log-scale")):
         if x.get(key):
             cmd.append(flag)
-    # Loud but not fatal: the runs (or, for a local experiment, the prepped
-    # CSV) are already on disk.
+    # Loud but not fatal: the data is already on disk.
     r = subprocess.run(cmd, cwd=ROOT)
     if r.returncode:
         print(
@@ -223,8 +219,7 @@ def run_plot(x: dict, out: Path) -> int:
 
 
 def remote(x: dict, deploy: str, extra: list[str], dry_run: bool) -> int:
-    """An experiment that spends real EC2 money: hands off to the bench's
-    own justfile, which owns its boot loop and replots itself when done."""
+    """Hands off to the bench's own justfile, which owns its boot loop."""
     print(f"experiment : {qualified(x['path'])}\n{x['description'].strip()}\n")
     bench_dir = ROOT / deploy
     cmd = ["just", "--justfile", str(bench_dir / "justfile"),
@@ -239,9 +234,7 @@ def remote(x: dict, deploy: str, extra: list[str], dry_run: bool) -> int:
 
 
 def local(x: dict, prep: str, out: Path, dry_run: bool, no_plot: bool) -> int:
-    """An experiment that reshapes already-captured results rather than
-    running a new sweep: no AWS env, no deploy, no target IP -- just
-    prep -> plot, same as the tail of a real sweep."""
+    """Reshapes already-captured results instead of running a new sweep."""
     print(f"experiment : {qualified(x['path'])}\n{x['description'].strip()}\n")
     print(f"prep       : {prep}\nout        : {out}")
     if dry_run:

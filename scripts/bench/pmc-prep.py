@@ -3,13 +3,11 @@
 
     just reproduce pmc-primitives
 
-The pmc-cost/pmc-perfevent/pmc-sample benches each capture their own raw
-per-boot CSV, named so the machine and system are encoded in the filename
-rather than a column. This turns one of those capture sets into the same
-axis/axis_value/valid/instance/value shape every other experiment's sweep
-CSV already has, one row per raw measurement -- plot.py's own mean/min-max
-aggregation over reps does the rest, so there is no pooling logic here to
-keep in sync with it.
+Each pmc-cost/pmc-perfevent/pmc-sample bench writes its own raw per-boot
+CSV, machine and system encoded in the filename rather than a column. This
+turns one of those into the axis/axis_value/valid/instance/value shape every
+sweep CSV has, one row per raw measurement -- plot.py aggregates over reps
+itself.
 """
 
 from __future__ import annotations
@@ -23,18 +21,14 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "results"
 
-# The workload size the counting figure reports at. The cost is flat in
-# region size -- measured from 1ns to 74us, it never moves off its constant --
-# so a sweep would spend a whole axis proving a line is horizontal.
+# The cost is flat in region size, so one representative workload size.
 COUNTING_KEYS = 2000
 
-# Nitro grants a guest only 2 counters on Graviton (measured on c7g.large and
-# c8g.large alike) against 8 on c7i and 5 on c7a, so these are the three
-# machines with a same-generation, same-counter-budget pair to compare.
+# Nitro grants a guest only 2 counters on Graviton against 8 on c7i and 5 on
+# c7a -- the three machines with a same-generation, same-budget pair.
 MACHINES = ["c7i.large", "c7a.large", "c7g.large"]
 
-# loop_overhead is the sub-nanosecond calibration floor the others sit on,
-# not a primitive worth plotting next to them.
+# loop_overhead is the calibration floor, not a primitive worth plotting.
 PRIMS = ["pmc_start_with_conf", "pmc_read", "pmc_write", "pmc_stop"]
 
 
@@ -72,9 +66,7 @@ def counting() -> pd.DataFrame:
         system, machine = run_id(csv)
         d = pd.read_csv(csv)
         for ns in d[d["keys"] == COUNTING_KEYS]["delta_ns"]:
-            # Added time cannot be negative; when it reads that way, a clock
-            # or scheduler artifact hit one of the two reads around the
-            # region, not the region itself.
+            # Added time can't be negative -- a clock/scheduler artifact, not data.
             rows.append(dict(axis="machine", axis_value=machine, value=ns / 1e3,
                               valid=ns >= 0, instance=machine, series=system))
     return pd.DataFrame(rows)
@@ -93,12 +85,8 @@ def primitives() -> pd.DataFrame:
 
 
 def metal() -> pd.DataFrame:
-    """The same primitives with no hypervisor underneath, in cycles rather
-    than nanoseconds since nothing manages P-states on bare metal.
-
-    c7i.metal-24xl against c7i.large: same Sapphire Rapids core, same kernel,
-    same image, only the hypervisor differs.
-    """
+    """Same primitives, no hypervisor. Cycles, not ns: nothing manages
+    P-states on bare metal, so wall-clock alone would just show the clock."""
     src = RESULTS / "pmc-cost" / "metal-experiment"
     rows = []
     for pattern, label in (("*c7i.metal-24xl-prim.csv", "Bare metal"),
