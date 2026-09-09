@@ -62,7 +62,9 @@ def rc(c: dict) -> dict:
         "xtick.color": c["muted"], "ytick.color": c["muted"],
         "xtick.labelsize": 9, "ytick.labelsize": 9,
         "xtick.major.size": 0, "ytick.major.size": 0,
-        "legend.frameon": False, "legend.fontsize": 9,
+        "legend.frameon": True, "legend.fontsize": 9,
+        "legend.facecolor": c["surface"], "legend.edgecolor": c["axis"],
+        "legend.framealpha": 1,
     }
 
 LABELS = {
@@ -203,25 +205,31 @@ def plot(
                     color=c["muted"],
                 )
 
-    # Colour cycles every len(series) slots, shape (hatch, or dash+marker)
-    # only every len(series) *series*, so a fourth series never lands back on
-    # both the same colour and the same shape as the first -- past 3 series a
-    # plain i % 3 would make series 0 and 3 indistinguishable to anyone who
-    # can't tell the colours apart at all.
+    # Latin square: hue = i % n, shape = (i + i//n) % n. Every series gets a
+    # distinct shape within the first n, and any later series that repeats a
+    # hue never repeats that hue's earlier shape too.
     n_hue = len(c["series"])
     if bar:
         width = 0.8 / len(groups)
         for i, (name, g) in enumerate(groups):
             col = c["series"][i % n_hue]
+            shape = (i + i // n_hue) % n_hue
             pos = xof(g["axis_value"]) + (i - (len(groups) - 1) / 2) * width
             err = [(g["mean"] - g["lo"]).tolist(), (g["hi"] - g["mean"]).tolist()]
             ax.bar(pos, g["mean"], width, yerr=err, capsize=3, color=col,
-                   hatch=HATCH[(i // n_hue) % len(HATCH)],
+                   hatch=HATCH[shape % len(HATCH)],
                    edgecolor=c["surface"], linewidth=0.8, label=name, zorder=3)
+            # At the bar's own top, not bar_label's default (bar + yerr),
+            # which would float the number above the whisker.
+            for xi, v in zip(pos, g["mean"]):
+                ax.text(xi, v, f"{v:.1f}", ha="center", va="bottom",
+                        fontsize=7.5, zorder=4, color=c["text"],
+                        bbox=dict(facecolor=c["surface"], edgecolor="none",
+                                  alpha=0.85, pad=0.8))
     else:
         for i, (name, g) in enumerate(groups):
             col = c["series"][i % n_hue]
-            shape = (i // n_hue) % len(DASHES)
+            shape = (i + i // n_hue) % n_hue
             ax.fill_between(
                 xof(g["axis_value"]), g["lo"], g["hi"], color=col, alpha=0.18, lw=0, zorder=2
             )
@@ -260,16 +268,17 @@ def plot(
             label="invalid run (excluded)",
         )
 
-    # Peak only; the axis carries the rest.
-    best = stats.loc[stats["mean"].idxmax()]
-    ax.annotate(
-        f"{best['mean']:.1f} {unit}",
-        (at[best["axis_value"]] if named else best["axis_value"], best["mean"]),
-        textcoords="offset points",
-        xytext=(0, 11),
-        ha="center",
-        fontweight="medium",
-    )
+    if not bar:
+        # Bars already label every value; this is the line case's only one.
+        best = stats.loc[stats["mean"].idxmax()]
+        ax.annotate(
+            f"{best['mean']:.1f} {unit}",
+            (at[best["axis_value"]] if named else best["axis_value"], best["mean"]),
+            textcoords="offset points",
+            xytext=(0, 11),
+            ha="center",
+            fontweight="medium",
+        )
 
     if not named:
         ax.set_xscale("log", base=2)
@@ -304,12 +313,10 @@ def plot(
     )
 
     if series_col or len(bad) or named:
-        # Below the axes always, not "best": inside the axes a legend can
-        # land on top of a line or a same-coloured bar behind it -- and with
-        # no legend background (frameon=False), a swatch on a same-coloured
-        # bar is invisible against it.
-        ax.legend(labelcolor=c["text"], loc="upper center",
-                  bbox_to_anchor=(0.5, -0.15), ncol=max(len(groups), 1))
+        # loc="best" scores candidate corners by data overlap and picks the
+        # least-bad one; an opaque background (see rc()) means it staying
+        # legible no longer depends on it finding a totally empty one.
+        ax.legend(labelcolor=c["text"])
 
     fig.tight_layout()
     # bbox_inches="tight": the legend now lives outside the axes, and a plain
