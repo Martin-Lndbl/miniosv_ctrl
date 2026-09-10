@@ -20,6 +20,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import matplotlib.patches as mpatches  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -132,6 +133,7 @@ def plot(
     unit: str = "Gbps",
     bar: bool = False,
     log_scale: bool = False,
+    box: bool = False,
 ) -> None:
     c = INK[mode]
     axis = str(df["axis"].iloc[0])
@@ -140,8 +142,8 @@ def plot(
     order = sorted(stats["axis_value"].unique(),
                     key=lambda v: rank(axis, v, {v: i for i, v in
                                                   enumerate(dict.fromkeys(df["axis_value"]))}))
-    # Named axes (categories, or any bar chart) are placed evenly, not by value.
-    named = bar or axis == "instance" or not all(numeric(v) for v in order)
+    # Named axes (categories, or any bar/box chart) are placed evenly, not by value.
+    named = bar or box or axis == "instance" or not all(numeric(v) for v in order)
     at = {v: i for i, v in enumerate(order)}
     xof = (lambda col: col.map(at)) if named else (lambda col: col)
     groups = (
@@ -188,7 +190,48 @@ def plot(
     # Latin square (hue = i%n, shape = (i+i//n)%n): a repeated hue never
     # repeats its earlier shape.
     n_hue = len(c["series"])
-    if bar:
+    handles: list = []
+    if box:
+        # Every valid rep as its own box, rather than the mean and range
+        # summarise() computes: with a handful of reps the shape of the
+        # spread is the point, and a mean hides a bimodal run.
+        valid = df[df["valid"]]
+        width = 0.8 / len(groups)
+        for i, (name, _) in enumerate(groups):
+            col = c["series"][i % n_hue]
+            sub = valid[valid[series_col] == name] if series_col else valid
+            data, pos = [], []
+            for v in order:
+                vals = sub[sub["axis_value"] == v][value_col].dropna().tolist()
+                if not vals:
+                    continue
+                data.append(vals)
+                pos.append(at[v] + (i - (len(groups) - 1) / 2) * width)
+            if not data:
+                continue
+            bp = ax.boxplot(
+                data, positions=pos, widths=width * 0.85, patch_artist=True,
+                manage_ticks=False, zorder=3,
+                medianprops=dict(color=c["surface"], lw=1.4),
+                whiskerprops=dict(color=col, lw=1.0),
+                capprops=dict(color=col, lw=1.0),
+                flierprops=dict(marker="o", ms=3, mfc="none", mec=col, lw=0.8),
+            )
+            for patch in bp["boxes"]:
+                patch.set(facecolor=col, edgecolor=c["surface"], linewidth=0.8,
+                          alpha=0.85)
+            # boxplot returns no legend handle, and an empty bar() does not
+            # carry the colour through; a Patch is the thing legend() wants.
+            handles.append(
+                mpatches.Patch(facecolor=col, edgecolor=c["surface"],
+                               linewidth=0.8, alpha=0.85, label=name)
+            )
+            # Individual reps on top: with n=3 the reader should see the
+            # points the box was drawn from, not just its summary.
+            for x, vals in zip(pos, data):
+                ax.plot([x] * len(vals), vals, ".", color=c["text"], ms=3.5,
+                        alpha=0.8, zorder=4, lw=0)
+    elif bar:
         width = 0.8 / len(groups)
         for i, (name, g) in enumerate(groups):
             col = c["series"][i % n_hue]
@@ -245,8 +288,8 @@ def plot(
             label="invalid run (excluded)",
         )
 
-    if not bar:
-        # Bars already label every value; this is the line case's only one.
+    if not bar and not box:
+        # Bars and boxes already show every value; this is the line case's only one.
         best = stats.loc[stats["mean"].idxmax()]
         ax.annotate(
             f"{best['mean']:.1f} {unit}",
@@ -273,22 +316,29 @@ def plot(
     ax.set_xlabel(LABELS.get(axis, axis))
     ax.set_ylabel(ylabel)
     reps = int(stats["n"].max())
+    # Say what the marks mean, since a box and a mean-with-band are read
+    # differently: the box is quartiles over reps, the band is min-max.
+    spread = (
+        f"{{}} · box is quartiles over {reps} runs, dots are the runs"
+        if box
+        else "{} · mean of " + str(reps) + " runs, band is min–max"
+    )
     fixed = ", ".join(
         f"{k}={tick(k, df[k].iloc[0])}" for k in LABELS if k in df and k != axis
     )
+    spread = spread.format(fixed)
     ax.set_title(title or f"{ylabel.split(' (')[0]} vs {axis}")
     ax.text(
         0,
         1.02,
-        (f"{fixed} · mean of {reps} runs, band is min–max" if named
-         else f"{instance} · {fixed} · mean of {reps} runs, band is min–max"),
+        (spread if named else f"{instance} · {spread}"),
         transform=ax.transAxes,
         fontsize=8.5,
         color=c["muted"],
     )
 
-    if ax.get_legend_handles_labels()[0]:
-        ax.legend(labelcolor=c["text"])
+    if handles or ax.get_legend_handles_labels()[0]:
+        ax.legend(handles=handles or None, labelcolor=c["text"])
 
     fig.tight_layout()
     fig.savefig(out, bbox_inches="tight")
@@ -327,6 +377,11 @@ def main() -> int:
     ap.add_argument(
         "--log-scale", action="store_true", help="log y-axis"
     )
+    ap.add_argument(
+        "--box", action="store_true",
+        help="a box per rep-set instead of a mean with a range; use when the "
+             "spread across reps is itself the result",
+    )
     a = ap.parse_args()
 
     root = Path(__file__).resolve().parents[2]
@@ -343,7 +398,7 @@ def main() -> int:
     mode = "dark" if a.dark else "light"
     out = a.out or a.csv.with_name(f"{a.csv.stem}{'-dark' if a.dark else ''}.png")
     plot(df, out, mode, a.series, a.title, a.value_col, a.ylabel, a.unit,
-         a.bar, a.log_scale)
+         a.bar, a.log_scale, a.box)
     valid = int(df["valid"].sum())
     print(f"wrote {out} ({valid}/{len(df)} runs valid)")
     return 0

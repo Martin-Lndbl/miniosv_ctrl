@@ -204,7 +204,8 @@ def run_plot(x: dict, out: Path) -> int:
                        ("ylabel", "--ylabel"), ("unit", "--unit")):
         if key in x:
             cmd += [flag, str(x[key])]
-    for key, flag in (("bar", "--bar"), ("log_scale", "--log-scale")):
+    for key, flag in (("bar", "--bar"), ("log_scale", "--log-scale"),
+                       ("box", "--box")):
         if x.get(key):
             cmd.append(flag)
     # Loud but not fatal: the data is already on disk.
