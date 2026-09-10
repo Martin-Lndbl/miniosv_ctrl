@@ -34,6 +34,12 @@ import runner  # noqa: E402
 from runner import ROOT, Bench, ec2, parse  # noqa: E402
 
 MINIOSV = ROOT / "miniosv"
+# How a miniOSv guest reports that it is dead. Any of these means no verdict is
+# ever coming, so the instance should be terminated rather than waited out.
+CRASH = re.compile(
+    r"^(?:page fault outside application.*|Assertion failed:.*|Aborted|\[backtrace\])$",
+    re.M,
+)
 IMAGE = MINIOSV / "build/release.x64/loader.img"
 
 
@@ -43,11 +49,28 @@ class DuckdbTpch(Bench):
     knobs = {
         "query": (None, int),  # boot arg -- which TPC-H query (1-22)
         "sf": (None, str),  # boot arg -- scale factor, matches tpch/sf<N>/
+        # boot arg -- DuckDB's thread count; 0 leaves its own default (one per
+        # CPU). Worth sweeping because mininet's workers poll without
+        # yielding, so workers + threads can oversubscribe a small instance.
+        "threads": (None, int),
+        # boot arg -- DuckDB's memory_limit. It otherwise sizes itself from
+        # sysconf(_SC_PHYS_PAGES), which reports the whole machine, and grows
+        # until the guest's frame allocator is under pressure. "" is DuckDB's
+        # own default.
+        "memlimit": (None, str),
         "workers": ("MININET_WORKERS", int),  # compiled in
         "conns": ("MININET_CONNS", int),  # compiled in
         "tls": ("MININET_TLS", int),  # compiled in -- 0 dials plain HTTP:80
     }
-    defaults = {"query": 6, "sf": "1", "workers": 2, "conns": 8, "tls": 1}
+    defaults = {
+        "query": 6,
+        "sf": "1",
+        "threads": 0,
+        "memlimit": "",
+        "workers": 2,
+        "conns": 8,
+        "tls": 1,
+    }
     instance_tag = "miniosv-loader-*"  # aws-deploy.py names every image this
     default_instance = "c7i.large"  # correctness + latency, not a throughput sweep
     max_vm_seconds = 300  # lineitem is 197 MiB at sf=1, no connection reuse yet (M3)
@@ -64,13 +87,71 @@ class DuckdbTpch(Bench):
         "queries_total": (r"^TPCH SUMMARY: ok=\d+ total=(\d+)", int),
         "checked": (r"checked=(\d+)", int),
         "matched": (r"matched=(\d+)", int),
+        # Time DuckDB's threads spent blocked in mininet::get(), summed over
+        # threads -- so it can exceed wall time, and does when every thread is
+        # waiting at once.
+        "net_ms": (r"^Q\d+: .*net_ms=([\d.]+)", float),
+        "net_calls": (r"^Q\d+: .*net_calls=(\d+)", int),
+        "memory_limit": (r"^memory: limit=(\S+)", str),
+        "hw_concurrency": (r"^cpus: hw_concurrency=(\d+)", int),
+        "duckdb_threads": (r"^cpus: .*duckdb_threads=(\d+)", int),
+        "requests": (r"^CONN STATS: requests=(\d+)", int),
+        "reused": (r"^CONN STATS: requests=\d+ reused=(\d+)", int),
+        # The split that says whether latency is queueing for a slot or time
+        # on the wire, and whether the workers were on a CPU while it elapsed.
+        "queue_us_avg": (r"^REQ STATS: queue_us_avg=(\d+)", int),
+        "wire_us_avg": (r"^REQ STATS: .*wire_us_avg=(\d+)", int),
+        "body_bytes": (r"^REQ STATS: .*bytes=(\d+)", int),
+        "mb_per_s": (r"^REQ STATS: .*mb_per_s=([\d.]+)", float),
+        "poll_iters": (r"^POLL STATS: iters=(\d+)", int),
+        "poll_gap_us_avg": (r"^POLL STATS: .*gap_us_avg=([\d.]+)", float),
+        "poll_gap_us_max": (r"^POLL STATS: .*gap_us_max=(\d+)", int),
+        "poll_gaps_over_1ms": (r"^POLL STATS: .*gaps_over_1ms=(\d+)", int),
+        # SYN to Established is one round trip, so setup_us_avg is the measured
+        # RTT -- the divisor in any window-limited throughput estimate.
+        "conns_established": (r"^SETUP STATS: conns=(\d+)", int),
+        "conns_failed": (r"^SETUP STATS: .*failed=(\d+)", int),
+        "syn_retries": (r"^SETUP STATS: .*syn_retries=(\d+)", int),
+        "setup_us_avg": (r"^SETUP STATS: .*setup_us_avg=(\d+)", int),
+        # drain_avg near one MSS means the peer sends a segment and waits;
+        # tx_ns_avg near the RTT would mean our own ACK is what paces it.
+        "recv_drains": (r"^RECV STATS: drains=(\d+)", int),
+        "recv_drain_avg": (r"^RECV STATS: .*drain_avg=(\d+)", int),
+        "recv_queue_max": (r"^RECV STATS: .*queue_max=(\d+)", int),
+        "tx_calls": (r"^TX STATS: calls=(\d+)", int),
+        "tx_ns_avg": (r"^TX STATS: .*tx_ns_avg=(\d+)", int),
+        "tx_ns_max": (r"^TX STATS: .*tx_ns_max=(\d+)", int),
+        # ttfb is S3 think time plus a round trip; xfer is the actual
+        # transfer. Which dominates decides whether bandwidth matters at all.
+        "ttfb_us_avg": (r"^LATENCY STATS: ttfb_us_avg=(\d+)", int),
+        "xfer_us_avg": (r"^LATENCY STATS: .*xfer_us_avg=(\d+)", int),
+        # Frames lost below smoltcp. imissed is the device dropping for want of
+        # a descriptor; the peer reads that as congestion and backs off.
+        "imissed": (r"^DROP STATS: imissed=(\d+)", int),
+        "ierrors": (r"^DROP STATS: .*ierrors=(\d+)", int),
+        "rx_nombuf": (r"^DROP STATS: .*rx_nombuf=(\d+)", int),
+        "misrouted": (r"^DROP STATS: .*misrouted=(\d+)", int),
+        "tx_alloc_fail": (r"^DROP STATS: .*tx_alloc_fail=(\d+)", int),
+        "tx_burst_fail": (r"^DROP STATS: .*tx_burst_fail=(\d+)", int),
+        "nic_ipackets": (r"^DROP STATS: .*ipackets=(\d+)", int),
+        "nic_ibytes": (r"^DROP STATS: .*ibytes=(\d+)", int),
     }
 
     def summary(self, row: dict) -> str:
-        return (
+        s = (
             f"Q{row.get('query')}: {row.get('query_ms')} ms, "
             f"{row.get('rows')} rows, match={row.get('match')}"
         )
+        if row.get("net_ms") is not None:
+            s += f", net {row['net_ms']} ms over {row.get('net_calls')} calls"
+        if row.get("mb_per_s") is not None:
+            s += f", {row['mb_per_s']} MB/s/conn"
+        if row.get("poll_gap_us_avg") is not None:
+            s += (
+                f", poll gap {row['poll_gap_us_avg']} us avg / "
+                f"{row.get('poll_gap_us_max')} us max"
+            )
+        return s
 
     def build(self, cfg: dict, ip: str) -> None:
         """Rebuild only when workers/conns changed (main.o depends on a stamp
@@ -100,7 +181,10 @@ class DuckdbTpch(Bench):
         if r.returncode:
             raise SystemExit(f"build failed for {cfg}:\n{r.stdout}\n{r.stderr}")
 
-        args = f"tpch --sf {cfg['sf']} {cfg['query']}"
+        # threads=0 means "DuckDB's own default"; don't pass the flag at all.
+        thr = f" --threads {cfg['threads']}" if cfg.get("threads") else ""
+        mem = f" --memlimit {cfg['memlimit']}" if cfg.get("memlimit") else ""
+        args = f"tpch --sf {cfg['sf']}{thr}{mem} {cfg['query']}"
         r = subprocess.run(
             [sys.executable, str(MINIOSV / "scripts/setargs.py"), str(IMAGE), args],
             capture_output=True,
@@ -140,13 +224,23 @@ class DuckdbTpch(Bench):
                 if p.poll() is not None:
                     break
                 time.sleep(1)
+            crashed = False
             if iid:  # billing starts here: cap it
                 for _ in range(self.max_vm_seconds):
-                    if re.search(
-                        r"^(COMPLETE|INCOMPLETE):",
-                        log.read_text(errors="replace"),
-                        re.M,
-                    ):
+                    text = log.read_text(errors="replace")
+                    if re.search(r"^(COMPLETE|INCOMPLETE):", text, re.M):
+                        break
+                    # A guest that has died says so and then says nothing ever
+                    # again, so waiting for its verdict means paying out the
+                    # whole vm cap for a machine that is already gone. Stop on
+                    # the death rattle instead.
+                    if m := CRASH.search(text):
+                        crashed = True
+                        print(
+                            f"    guest died: {m.group(0).strip()} — "
+                            f"terminating {iid} now",
+                            flush=True,
+                        )
                         break
                     if p.poll() is not None:
                         break
@@ -177,6 +271,10 @@ class DuckdbTpch(Bench):
         text = log.read_text(errors="replace")
         row = parse(text, self.metrics)
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
+        # Recorded, not just acted on: a crash and a query that merely returned
+        # nothing both come out as valid=False, and only one of them means the
+        # image is broken.
+        row["crashed"] = crashed or bool(CRASH.search(text))
         row["log"] = log.name
         return row
 
