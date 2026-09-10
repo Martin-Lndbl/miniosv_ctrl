@@ -1,0 +1,64 @@
+name = "duckdb-tpch-sf1-miniosv"
+title = "DuckDB-on-miniOSv: TPC-H query latency over mininet+httpfs, sf=1"
+description = """
+The miniOSv arm of the sf=1 comparison against competitors/duckdb-linux
+(experiments/query/duckdb-tpch-sf1-linux.toml). Same instance, same bucket,
+same five queries, same three reps, so the two CSVs overlay directly:
+
+    just plot results/query/miniosv/tpch-sf1-c6in2xl.csv \\
+              results/query/linux/tpch-sf1-c6in2xl.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+
+sf=1 rather than sf=10, and that is the whole point. The tpch extension ships
+canned answers for scale factors up to 1, so every query here is checked
+field by field and a run that returns the wrong data fails rather than being
+timed. Above sf=1 there are no answers, `match` reads "unchecked", and this
+image is known to corrupt data under memory pressure -- 6 crashes and 10
+corrupted runs against 10 completions at sf=10, versus 21 clean completions
+and no failures at sf=1. Numbers nothing verified are not numbers.
+
+Five query shapes: Q06 a single-table scan, Q01 a full-table aggregate, Q03
+and Q10 joins, Q12 a join with a conditional aggregate. Q10 is included here
+*because* it is excluded at sf=10 -- it passes at this scale, which is part of
+the finding rather than a footnote.
+
+c6in.2xlarge: at sf=1 a query moves about 50 MB, far inside any burst
+allowance, so the burstable NIC that rules this instance out at sf=10 cannot
+skew it here. Both arms take their own defaults for thread count; note that
+miniOSv additionally runs 2 mininet polling workers, which do not yield.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.2xlarge"
+axis     = "query"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 300
+out      = "results/query/miniosv/tpch-sf1-c6in2xl.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "1"
+workers = 2
+conns   = 16
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+[[points]]
+query = 1
+[[points]]
+query = 3
+[[points]]
+query = 6
+[[points]]
+query = 10
+[[points]]
+query = 12

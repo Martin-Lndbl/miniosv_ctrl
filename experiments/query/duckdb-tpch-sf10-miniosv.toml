@@ -1,0 +1,69 @@
+name = "duckdb-tpch-sf10-miniosv"
+title = "DuckDB-on-miniOSv: TPC-H query latency over mininet+httpfs, sf=10"
+description = """
+The miniOSv arm of the sf=10 comparison against competitors/duckdb-linux
+(experiments/query/duckdb-tpch-sf10-linux.toml). Same instance, same bucket,
+same four queries, same three reps, so the two CSVs overlay directly:
+
+    just plot results/query/miniosv/tpch-sf10.csv results/query/linux/tpch-sf10.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+
+Four query shapes rather than one, because the cost model is per range read
+and the queries differ in how many they issue: Q06 is a single-table scan,
+Q01 a full-table aggregate, Q03 a three-way join and Q10 a four-way join with
+an aggregate on top.
+
+Three reps because this bench is noisy in a way the sf=1 numbers hid: the same
+configuration produced 3022 and 4732 ms on separate runs, so a single rep per
+point cannot distinguish a real difference from the spread. A box per point,
+not a mean with error bars, for the same reason.
+
+sf=10 has no canned answers (the tpch extension only ships them for 0.01, 0.1
+and 1), so `match` reads "unchecked" here and correctness rests on the sf=1
+experiment. c6in.8xlarge because it is the smallest instance with a sustained
+rather than burstable network allowance -- on a burstable one a longer boot
+banks credits and flatters whichever side boots slower.
+
+Q10 is deliberately absent. It fails on miniOSv at sf=10, reproducibly and
+identically on two runs -- "TProtocolException: Invalid data" after ~135
+requests -- while the Linux arm runs it fine against the same parquet, so the
+data is good and this is a miniOSv-side bug in its own right rather than
+something to average over. Q12 takes its place; Q05 is also verified working
+at sf=10 if a fifth shape is wanted.
+
+Every query here has been smoke-tested at sf=10 on both arms before being
+listed: Q01, Q03, Q06 and Q12 all complete on miniOSv and on Linux.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.8xlarge"
+axis     = "query"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+out      = "results/query/miniosv/tpch-sf10.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "10"
+workers = 2
+conns   = 16
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+[[points]]
+query = 1
+[[points]]
+query = 3
+[[points]]
+query = 6
+[[points]]
+query = 12

@@ -1,0 +1,65 @@
+name = "duckdb-tpch-sf10-linux"
+title = "DuckDB on Linux: TPC-H query latency over httpfs, sf=10"
+description = """
+The Linux arm of the sf=10 comparison against apps/bench/duckdb-tpch
+(experiments/query/duckdb-tpch-sf10-miniosv.toml). Real DuckDB 1.5.5 with the
+stock httpfs extension on AL2023, reading the same parquet from the same
+bucket on the same instance size, so the two CSVs overlay directly:
+
+    just plot results/query/miniosv/tpch-sf10.csv results/query/linux/tpch-sf10.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+
+`pin` is left empty, so this resolves the bucket name normally and may spread
+its connections over several S3 front-ends while a mininet image dials the one
+address compiled into it. That asymmetry was measured and is not what decides
+the result -- pinning cost 4.8% at sf=10 (37832 vs 36114 ms on c6in.large) --
+so the default is left as a stock client behaves.
+
+Note this side runs the *released* DuckDB binary while the miniOSv side builds
+from the vendored source. That is fine for comparing the two systems as they
+are, but it means any change to the vendored parquet reader (range coalescing,
+concurrent prefetch) would show up here as a miniOSv win that is really a
+DuckDB one. Change both sides or neither.
+
+Q10 is deliberately absent. It fails on miniOSv at sf=10, reproducibly and
+identically on two runs -- "TProtocolException: Invalid data" after ~135
+requests -- while the Linux arm runs it fine against the same parquet, so the
+data is good and this is a miniOSv-side bug in its own right rather than
+something to average over. Q12 takes its place; Q05 is also verified working
+at sf=10 if a fifth shape is wanted.
+
+Every query here has been smoke-tested at sf=10 on both arms before being
+listed: Q01, Q03, Q06 and Q12 all complete on miniOSv and on Linux.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "c6in.8xlarge"
+axis     = "query"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+out      = "results/query/linux/tpch-sf10.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf  = "10"
+pin = ""
+
+[env]
+BENCH_NOTE = "Linux"
+
+[[points]]
+query = 1
+[[points]]
+query = 3
+[[points]]
+query = 6
+[[points]]
+query = 12
