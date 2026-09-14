@@ -3,7 +3,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 root := parent_directory(parent_directory(justfile_directory()))
 # The root .env, shared with apps/bench/smoltcp-s3, which owns the bucket and
 # the S3 gateway endpoint this bench borrows.
-env_file := root / ".env"
+common := justfile_directory() / "../../scripts/bench-setup.sh"
 
 bin_key := "bin/linux-perfevent"
 binary := "build/linux-perfevent"
@@ -42,7 +42,8 @@ build:
 setup: build
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
+    . "{{ common }}"
+    bench_env_load
 
     for suffix in "" "-aarch64"; do
         echo "uploading $(stat -c %s {{ binary }}$suffix) bytes to s3://$AWS_BUCKET/{{ bin_key }}$suffix"
@@ -58,20 +59,16 @@ setup: build
 _policy action:
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
-    vpce=$(aws ec2 describe-vpc-endpoints \
-        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
-                  "Name=vpc-endpoint-type,Values=Gateway" \
-        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
-    python3 "{{ root }}/scripts/bucket_policy.py" \
-        "{{ action }}" --sid BenchBinFromVpce --vpce "$vpce" \
-        --resource "arn:aws:s3:::$AWS_BUCKET/bin/*"
+    . "{{ common }}"
+    bench_env_load
+    bench_policy "{{ action }}" BenchBinFromVpce "arn:aws:s3:::$AWS_BUCKET/bin/*"
 
 # Launch on EC2 and bring back the console (default c7i.large)
 deploy instance="c7i.large" *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
+    . "{{ common }}"
+    bench_env_load
     python3 "{{ root }}/competitors/common/deploy.py" "{{ instance }}" \
         --key linux-perfevent --results pmc-perfevent \
         --marker pmc-perfevent --csv-tag PERFEVENT {{ args }}

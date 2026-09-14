@@ -12,11 +12,11 @@ default:
 # Run a bench's setup, e.g. 'just setup apps/bench/smoltcp-s3', or
 # 'just setup apps/bench/duckdb-tpch 1,0.1' to forward a bench-specific arg
 setup app *args:
-    just --justfile "{{ absolute_path(app) }}/justfile" --working-directory "{{ absolute_path(app) }}" setup {{ args }}
+    @"{{ justfile_directory() }}/scripts/bench-dispatch.sh" setup "{{ app }}" {{ args }}
 
 # Delete a bench's bucket and .env, e.g. 'just clean apps/bench/smoltcp-s3' ('force' skips the prompt)
 clean app *force:
-    just --justfile "{{ absolute_path(app) }}/justfile" --working-directory "{{ absolute_path(app) }}" clean {{ force }}
+    @"{{ justfile_directory() }}/scripts/bench-dispatch.sh" clean "{{ app }}" {{ force }}
 
 # Build the boot image against an app; extra args go to make (-j8, arch=aarch64, …)
 build app *args:

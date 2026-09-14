@@ -1,8 +1,11 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# The root .env, shared with apps/bench/duckdb-tpch: same bucket, same TPC-H
-# data, same VPC gateway endpoint. This bench adds one more grant to it.
-env_file := parent_directory(parent_directory(justfile_directory())) / ".env"
+# The root .env, the login, the gateway endpoint and the bucket-policy grant
+# are the same four steps in every S3 bench, so they come from there; what is
+# left below is this bench's own: which binary, at which version, under which
+# prefix. Shared with apps/bench/duckdb-tpch -- same bucket, same TPC-H data,
+# same endpoint -- and this bench only adds one more grant to it.
+common := justfile_directory() / "../../scripts/bench-setup.sh"
 bin_prefix := "bin/duckdb-linux"
 duckdb_version := "1.5.5"
 
@@ -16,14 +19,9 @@ setup:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    env_file="{{ env_file }}"
-    if [ ! -f "$env_file" ]; then
-        echo "no $env_file -- run 'just setup apps/bench/duckdb-tpch' first." >&2
-        echo "That recipe owns the bucket and the TPC-H data; this one only" >&2
-        echo "adds a duckdb binary to the same bucket." >&2
-        exit 1
-    fi
-    set -a; . "$env_file"; set +a
+    . "{{ common }}"
+    bench_env_load
+    bench_login
 
     tmpdir=$(mktemp -d)
     trap 'rm -rf "$tmpdir"' EXIT
@@ -47,19 +45,8 @@ setup:
     aws s3 cp "$tmpdir/httpfs.duckdb_extension" \
         "s3://$AWS_BUCKET/{{ bin_prefix }}/httpfs.duckdb_extension" --only-show-errors
 
-    vpce=$(aws ec2 describe-vpc-endpoints \
-        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
-                  "Name=vpc-endpoint-type,Values=Gateway" \
-        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
-    if [ -z "$vpce" ] || [ "$vpce" = "None" ]; then
-        echo "no S3 gateway endpoint in $AWS_REGION -- run 'just setup apps/bench/smoltcp-s3' first" >&2
-        exit 1
-    fi
-
     # Merged by Sid, same as every other bench sharing this bucket.
-    AWS_BUCKET="$AWS_BUCKET" python3 "{{ justfile_directory() }}/../../scripts/bucket_policy.py" \
-        add --sid DuckdbLinuxBinFromVpce --vpce "$vpce" \
-        --resource "arn:aws:s3:::$AWS_BUCKET/{{ bin_prefix }}/*"
+    bench_grant DuckdbLinuxBinFromVpce "arn:aws:s3:::$AWS_BUCKET/{{ bin_prefix }}/*"
 
     echo
     echo "duckdb-linux ready:"
@@ -70,7 +57,7 @@ setup:
 clean:
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
+    . "{{ common }}"
+    bench_env_load
     aws s3 rm "s3://$AWS_BUCKET/{{ bin_prefix }}/" --recursive
-    AWS_BUCKET="$AWS_BUCKET" python3 "{{ justfile_directory() }}/../../scripts/bucket_policy.py" \
-        remove --sid DuckdbLinuxBinFromVpce
+    bench_revoke DuckdbLinuxBinFromVpce

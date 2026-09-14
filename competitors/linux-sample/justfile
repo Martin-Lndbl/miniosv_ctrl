@@ -3,7 +3,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 root := parent_directory(parent_directory(justfile_directory()))
 # The root .env, shared with apps/bench/smoltcp-s3, which owns the bucket and
 # the S3 gateway endpoint this bench borrows.
-env_file := root / ".env"
+common := justfile_directory() / "../../scripts/bench-setup.sh"
 
 # Where the static binary lands in the bucket; instance.py fetches it unsigned.
 bin_key := "bin/linux-sample"          # + "-aarch64" for the Graviton build
@@ -38,20 +38,9 @@ setup: build
     #!/usr/bin/env bash
     set -euo pipefail
 
-    if [ ! -f "{{ env_file }}" ]; then
-        echo "no {{ env_file }} — run 'just setup apps/bench/smoltcp-s3' first." >&2
-        echo "That recipe owns the bucket and the S3 gateway endpoint; this one" >&2
-        echo "only adds a second binary to the same bucket." >&2
-        exit 1
-    fi
-    set -a; . "{{ env_file }}"; set +a
-
-    for req in AWS_BUCKET AWS_REGION AWS_SUBNET; do
-        if [ -z "${!req:-}" ]; then
-            echo "$req missing from {{ env_file }}" >&2
-            exit 1
-        fi
-    done
+    . "{{ common }}"
+    bench_env_load
+    bench_env_require AWS_SUBNET
 
     if ! aws sts get-caller-identity >/dev/null 2>&1; then
         echo "not logged in to aws — run 'aws login --remote'" >&2
@@ -72,26 +61,18 @@ setup: build
 _policy action:
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
+    . "{{ common }}"
+    bench_env_load
 
-    vpce=$(aws ec2 describe-vpc-endpoints \
-        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
-                  "Name=vpc-endpoint-type,Values=Gateway" \
-        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
-    if [ -z "$vpce" ] || [ "$vpce" = "None" ]; then
-        echo "no S3 gateway endpoint in $AWS_REGION — run 'just setup apps/bench/smoltcp-s3'" >&2
-        exit 1
-    fi
 
-    python3 "{{ root }}/scripts/bucket_policy.py" \
-        "{{ action }}" --sid BenchBinFromVpce --vpce "$vpce" \
-        --resource "arn:aws:s3:::$AWS_BUCKET/bin/*"
+    bench_policy "{{ action }}" BenchBinFromVpce "arn:aws:s3:::$AWS_BUCKET/bin/*"
 
 # Launch on EC2 and bring back the console (default c7i.large)
 deploy instance="c7i.large" *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
+    . "{{ common }}"
+    bench_env_load
     python3 "{{ root }}/competitors/common/deploy.py" "{{ instance }}" \
         --key linux-sample --results pmc-sample \
         --marker pmc-sample --csv-tag SAMPLE {{ args }}
@@ -107,7 +88,8 @@ local:
 clean *force:
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
+    . "{{ common }}"
+    bench_env_load
 
     echo "about to delete:"
     echo "  s3://$AWS_BUCKET/{{ bin_key }}"

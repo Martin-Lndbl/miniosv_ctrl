@@ -2,7 +2,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 # The root .env, shared with apps/bench/smoltcp-s3: the anchor is only valid if
 # both stacks use the same bucket, region, blob size and BENCH_* shape.
-env_file := parent_directory(parent_directory(justfile_directory())) / ".env"
+common := justfile_directory() / "../../scripts/bench-setup.sh"
 
 # Where the static binary lands in the bucket; instance.py fetches it unsigned.
 bin_key := "bin/linux-s3"
@@ -16,27 +16,11 @@ setup: build
     #!/usr/bin/env bash
     set -euo pipefail
 
-    env_file="{{ env_file }}"
-    if [ ! -f "$env_file" ]; then
-        echo "no $env_file — run 'just setup apps/bench/smoltcp-s3' first." >&2
-        echo "That recipe owns the bucket, the blob and the shape; this one only" >&2
-        echo "adds a second binary to the same bucket." >&2
-        exit 1
-    fi
-    set -a; . "$env_file"; set +a
-
-    for req in AWS_BUCKET AWS_REGION AWS_SUBNET AWS_BUCKET_SIZE \
-               BENCH_WORKERS BENCH_CONNS_PER_WORKER BENCH_BLOCK_SIZE; do
-        if [ -z "${!req:-}" ]; then
-            echo "$req missing from $env_file — re-run 'just setup apps/bench/smoltcp-s3'" >&2
-            exit 1
-        fi
-    done
-
-    if ! aws sts get-caller-identity >/dev/null 2>&1; then
-        echo "not logged in to aws — running 'aws login --remote'"
-        aws login --remote
-    fi
+    . "{{ common }}"
+    bench_env_load
+    bench_env_require AWS_SUBNET AWS_BUCKET_SIZE \
+        BENCH_WORKERS BENCH_CONNS_PER_WORKER BENCH_BLOCK_SIZE
+    bench_login
 
     # Caught here rather than by a boot that dies. 4 MiB/conn matches the
     # smoltcp rx ring, which the parity run's SO_RCVBUF mirrors.
@@ -60,20 +44,9 @@ setup: build
 _policy action:
     #!/usr/bin/env bash
     set -euo pipefail
-    set -a; . "{{ env_file }}"; set +a
-
-    vpce=$(aws ec2 describe-vpc-endpoints \
-        --filters "Name=service-name,Values=com.amazonaws.$AWS_REGION.s3" \
-                  "Name=vpc-endpoint-type,Values=Gateway" \
-        --query "VpcEndpoints[0].VpcEndpointId" --output text 2>/dev/null || true)
-    if [ -z "$vpce" ] || [ "$vpce" = "None" ]; then
-        echo "no S3 gateway endpoint in $AWS_REGION — run 'just setup apps/bench/smoltcp-s3'" >&2
-        exit 1
-    fi
-
-    python3 "{{ justfile_directory() }}/../../scripts/bucket_policy.py" \
-        "{{ action }}" --sid BenchBinFromVpce --vpce "$vpce" \
-        --resource "arn:aws:s3:::$AWS_BUCKET/bin/*"
+    . "{{ common }}"
+    bench_env_load
+    bench_policy "{{ action }}" BenchBinFromVpce "arn:aws:s3:::$AWS_BUCKET/bin/*"
 
 # Build the static binary only
 build:
@@ -95,9 +68,9 @@ build:
 clean *force:
     #!/usr/bin/env bash
     set -euo pipefail
-    env_file="{{ env_file }}"
-    if [ ! -f "$env_file" ]; then echo "nothing to clean up"; exit 0; fi
-    set -a; . "$env_file"; set +a
+    . "{{ common }}"
+    [ -f "$BENCH_ENV" ] || { echo "nothing to clean up"; exit 0; }
+    bench_env_load
 
     # Never touches the bucket or the blob — 'just clean
     # apps/bench/smoltcp-s3' owns those.
