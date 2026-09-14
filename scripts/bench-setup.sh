@@ -40,9 +40,13 @@ bench_login() {
 bench_env_load() {
     if [ ! -f "$BENCH_ENV" ] || ! grep -q '^AWS_BUCKET=' "$BENCH_ENV"; then
         if [ "${1-}" = "bootstrap" ]; then
-            echo "no bucket on record yet -- running smoltcp-s3's setup first"
+            echo "no bucket on record yet -- provisioning one via smoltcp-s3's setup"
+            # with_blob=0: that bench's 10 GiB random blob is its own workload,
+            # and a caller bootstrapping the bucket for its own data should not
+            # wait for, or pay for, an upload it will never read. Running
+            # smoltcp-s3's own setup later adds the blob.
             just --justfile "$BENCH_ROOT/apps/bench/smoltcp-s3/justfile" \
-                 --working-directory "$BENCH_ROOT/apps/bench/smoltcp-s3" setup
+                 --working-directory "$BENCH_ROOT/apps/bench/smoltcp-s3" setup 0
         else
             bench_die "no $BENCH_ENV -- run 'just setup apps/bench/smoltcp-s3' first.
 That recipe owns the bucket and the gateway endpoint; this one only adds to them."
