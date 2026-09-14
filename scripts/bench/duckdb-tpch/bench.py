@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import boto3  # noqa: E402
 import runner  # noqa: E402
 from runner import ROOT, Bench, ec2, parse  # noqa: E402
 
@@ -153,6 +154,32 @@ class DuckdbTpch(Bench):
             )
         return s
 
+    # Checked once per scale factor, not once per run: a sweep over queries at
+    # one sf would otherwise ask S3 the same question for every point.
+    _checked: set = set()
+
+    def require_data(self, bucket: str, sf: str) -> None:
+        """Fail before anything is launched if the bucket has no data at this
+        scale factor. `just setup` defaults to sf=1, so asking for --sf 10
+        against a freshly provisioned bucket otherwise gets as far as booting
+        an instance before the guest reports a 404 it cannot explain."""
+        if sf in self._checked:
+            return
+        key = f"tpch/sf{sf}/lineitem.parquet"
+        try:
+            boto3.client("s3", region_name=os.environ["AWS_REGION"]).head_object(
+                Bucket=bucket, Key=key
+            )
+        except Exception:
+            raise SystemExit(
+                f"no TPC-H data at sf={sf} in s3://{bucket} (looked for {key}).\n"
+                f"Generate and upload it with:\n"
+                f"    just setup apps/bench/duckdb-tpch {sf}\n"
+                f"That recipe takes the scale factors as its argument and "
+                f"defaults to 1, so a bucket set up without one has only sf=1."
+            )
+        self._checked.add(sf)
+
     def build(self, cfg: dict, ip: str) -> None:
         """Rebuild only when workers/conns changed (main.o depends on a stamp
         file miniosv.mk only touches when MININET_* actually moved); query/sf
@@ -160,6 +187,7 @@ class DuckdbTpch(Bench):
         bucket = os.environ["AWS_BUCKET"]
         region = os.environ["AWS_REGION"]
         host = f"{bucket}.s3.{region}.amazonaws.com"
+        self.require_data(bucket, cfg["sf"])
         env = {
             **os.environ,
             "MININET_HOST": host,
