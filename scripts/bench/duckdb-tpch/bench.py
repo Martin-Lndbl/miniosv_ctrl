@@ -400,6 +400,14 @@ class DuckdbTpch(Bench):
         columns cannot be subtracted from the other arm's."""
         if not bool(row.get("complete")):
             return False
+        # A run that completed but whose timing never reached us is not a data
+        # point. The serial console is not line-atomic, so a kernel message can
+        # land on top of the `Qnn:` line and take the run's only number with
+        # it; without this the row counts toward "n valid" while contributing
+        # an empty cell, and a plot draws a box over fewer reps than its
+        # caption claims. Same gate as the duckdb-linux driver's.
+        if str(row.get("cpuprobe") or "") != "1" and row.get("query_ms") is None:
+            return False
         if str(row.get("cpuprobe") or "") == "1":
             return row.get("probe_failed") is None and row.get("cpuprobe_ok") == len(
                 PROBE_STEP_NAMES
