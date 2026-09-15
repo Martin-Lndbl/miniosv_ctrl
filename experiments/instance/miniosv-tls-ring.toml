@@ -1,0 +1,33 @@
+name = "miniosv-tls-ring"
+title = "GET throughput with ring's AES-GCM, against the pure-Rust provider"
+description = """
+The A/B for the crypto swap. Same machine, same shape, same bucket as
+instance/miniosv-tls -- only the rustls provider differs, so the delta is the
+record layer and nothing else. Compare against results/instance/miniosv/tls.csv
+at the matching instance, not across shapes.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = ""  # overridden per point
+axis     = "instance"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 180
+out      = "results/instance/miniosv/tls-ring.csv"
+
+target_ip = ""
+
+[fixed]
+workers = 64
+conns   = 16
+block   = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+
+# The small end only: c6in.large is where the earlier sweep has three clean
+# reps to compare against, and it is burstable, so both sides are read the same
+# way -- as an upper bound, measured the same way on the same instance size.
+[[points]]
+instance = "c6in.large"

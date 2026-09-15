@@ -1,0 +1,48 @@
+name = "duckdb-sf1-q1-miniosv"
+title = "DuckDB-on-miniOSv: does the polling worker count cost Q01 its CPU?"
+description = """
+Q01 at sf=1 is the one query where miniOSv is clearly behind Linux -- 931 ms
+against 783 ms, while Q03 is a tie -- and Q01 is the CPU-bound shape of the
+five: a full-table aggregate over ~54 MB, which the network delivers in about
+a second at a rate the stack reaches with one worker to spare.
+
+So the suspicion is not latency but CPU. mininet's workers poll without
+yielding, which scripts/bench/duckdb-tpch/bench.py already flags as worth
+sweeping: on 8 vCPUs, two spinning workers are a quarter of the machine that
+DuckDB's threads do not get. If that is the cost, one worker should make Q01
+faster rather than slower, because 54 MB/s is far inside what a single worker
+carries (it does 4.5 Gbps in the GET benchmark).
+
+The prediction the sweep is here to falsify: Q01 improves from 2 workers to 1,
+and the improvement is roughly the CPU share returned. If instead it degrades,
+the request path is the constraint after all and the CPU story is wrong.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.2xlarge"
+axis     = "workers"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 300
+out      = "results/workers/miniosv/duckdb-sf1-q1.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Q01 latency (ms)"
+unit      = "ms"
+
+[fixed]
+sf    = "1"
+query = 1
+conns = 16
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+[[points]]
+workers = 1
+[[points]]
+workers = 2
+[[points]]
+workers = 4

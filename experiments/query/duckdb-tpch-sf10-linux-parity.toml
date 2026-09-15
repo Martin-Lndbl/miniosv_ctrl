@@ -1,0 +1,82 @@
+name = "duckdb-tpch-sf10-linux-parity"
+title = "DuckDB on Linux at mininet's receive parity: TPC-H query latency, sf=10"
+description = """
+The parity arm. Identical to experiments/query/duckdb-tpch-sf10-linux.toml
+except that the NIC is made to do the same shape of work mininet's receive
+path does:
+
+  - `gro = "off"`, so the stack sees each 1460-byte frame instead of one
+    coalesced segment. mininet has no GRO; smoltcp is handed whatever
+    minidpdk pulled off the ring.
+  - `queues = "2"`, one combined RX/TX queue per mininet worker
+    (MININET_WORKERS=2 in the miniOSv arm), instead of Linux's default of one
+    per vCPU -- 32 of them on a c6in.8xlarge.
+
+DuckDB's own parallelism is left alone on both sides and already matches: the
+miniOSv arm reports duckdb_threads=32 on hw_concurrency=32, which is what the
+Linux arm takes by default. So this arm changes the network fan-out and the
+offload, and nothing above them.
+
+Run all three and overlay:
+
+    just plot results/query/miniosv/tpch-sf10.csv \\
+              results/query/linux/tpch-sf10.csv \\
+              results/query/linux/tpch-sf10-parity.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+
+Both Linux readings are worth keeping, and neither is "the honest one" alone.
+GRO and a queue per core are not defects to be corrected away -- they are a
+large part of why you would run Linux, and taking them off measures a machine
+nobody deploys. But leaving them on credits Linux with work the hardware and
+kernel do for free that miniOSv has no way to ask for, so the stock gap is not
+a statement about the two stacks' own code either. The stock arm answers "how
+does miniOSv compare to Linux as deployed"; this one answers "how much of that
+gap is the receive path rather than the stack".
+
+The settings are read back off the device with `ethtool -k`/`-l` and printed as
+a `nic:` line, and the driver marks a row invalid when what came back does not
+match what was asked. That matters here: AL2023 has no route to a package
+mirror, so a missing ethtool cannot be installed, and ENA clamps the combined
+queue count per instance size. Either would otherwise produce a plausible
+number that is not a parity number.
+
+Same five queries as the other two arms, Q10 included: see
+duckdb-tpch-sf10-miniosv.toml for why it was absent until 2026-09-14 and what
+fixed it.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "c6in.8xlarge"
+axis     = "query"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+out      = "results/query/linux/tpch-sf10-parity.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf     = "10"
+pin    = ""
+gro    = "off"
+queues = "2"
+
+[env]
+BENCH_NOTE = "Linux (GRO off, 2 queues)"
+
+[[points]]
+query = 1
+[[points]]
+query = 3
+[[points]]
+query = 6
+[[points]]
+query = 10
+[[points]]
+query = 12

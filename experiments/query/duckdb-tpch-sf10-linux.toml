@@ -21,15 +21,14 @@ are, but it means any change to the vendored parquet reader (range coalescing,
 concurrent prefetch) would show up here as a miniOSv win that is really a
 DuckDB one. Change both sides or neither.
 
-Q10 is deliberately absent. It fails on miniOSv at sf=10, reproducibly and
-identically on two runs -- "TProtocolException: Invalid data" after ~135
-requests -- while the Linux arm runs it fine against the same parquet, so the
-data is good and this is a miniOSv-side bug in its own right rather than
-something to average over. Q12 takes its place; Q05 is also verified working
-at sf=10 if a fifth shape is wanted.
+Q10 is back, as of 2026-09-14. It never failed on this arm; it was dropped
+because the miniOSv side crashed on it, which turned out to be a kernel
+memory-corruption bug (stale TLB entries surviving a shootdown) rather than
+anything about the query or the data. Fixed in miniosv 9bc546e1a, so both arms
+run it again. Q12 was its stand-in and is kept, making five shapes.
 
 Every query here has been smoke-tested at sf=10 on both arms before being
-listed: Q01, Q03, Q06 and Q12 all complete on miniOSv and on Linux.
+listed: Q01, Q03, Q06, Q10 and Q12 all complete on miniOSv and on Linux.
 """
 
 bench    = "competitors/duckdb-linux"
@@ -61,5 +60,7 @@ query = 1
 query = 3
 [[points]]
 query = 6
+[[points]]
+query = 10
 [[points]]
 query = 12

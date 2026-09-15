@@ -1,0 +1,55 @@
+name = "duckdb-sf1-q1-miniosv-stats"
+title = "DuckDB-on-miniOSv: confirmation run with the stats wired back up"
+description = """
+Re-run of workers/duckdb-sf1-q1-miniosv with one change in the stack: a worker
+whose queue is empty and whose last poll moved nothing parks after a few
+thousand turns, and Queue::push unparks it. It still owns its CPU outright
+whenever a request is in flight -- it is the only thing that will ever see the
+response -- so the only work it can be late for is a request that arrives while
+it sleeps, and that one wakes it directly.
+
+Yielding was tried first and is the wrong primitive: it promises another turn
+eventually, and against eight runnable DuckDB threads "eventually" showed up as
+a 1242 ms outlier on a query whose median is 818. Parking makes the wake
+deterministic.
+
+What this should show: workers=4 recovers most of the 1038 -> 818 ms it loses
+to spinning, since three of those four workers have nothing to do, while
+workers=1 and 2 are unchanged. Three reps rather than two, because the effect
+being measured at workers=1 is smaller than the run-to-run spread of the
+earlier sweep.
+"""
+
+# Parking is gone again (it lost); what is new here is that the per-request
+# and poll-gap counters are actually called. They were written but never wired
+# into serve(), which is why every run so far reported 0.0 MB/s/conn and a
+# poll gap of 0. This run is the check that the numbers come back and that the
+# stack performs as it did before the instrumentation went in.
+#
+# Only workers=2, the configured default, and two reps: this is a confirmation,
+# not a sweep.
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.2xlarge"
+axis     = "workers"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 300
+out      = "results/workers/miniosv/duckdb-sf1-q1-stats.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Q01 latency (ms)"
+unit      = "ms"
+
+[fixed]
+sf    = "1"
+query = 1
+conns = 16
+
+[env]
+BENCH_NOTE = "miniOSv+park"
+
+[[points]]
+workers = 2

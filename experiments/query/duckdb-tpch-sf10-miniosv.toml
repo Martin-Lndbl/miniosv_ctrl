@@ -3,15 +3,15 @@ title = "DuckDB-on-miniOSv: TPC-H query latency over mininet+httpfs, sf=10"
 description = """
 The miniOSv arm of the sf=10 comparison against competitors/duckdb-linux
 (experiments/query/duckdb-tpch-sf10-linux.toml). Same instance, same bucket,
-same four queries, same three reps, so the two CSVs overlay directly:
+same five queries, same three reps, so the two CSVs overlay directly:
 
     just plot results/query/miniosv/tpch-sf10.csv results/query/linux/tpch-sf10.csv \\
         --series note --box --value-col query_ms --ylabel "Query latency (ms)"
 
-Four query shapes rather than one, because the cost model is per range read
+Five query shapes rather than one, because the cost model is per range read
 and the queries differ in how many they issue: Q06 is a single-table scan,
-Q01 a full-table aggregate, Q03 a three-way join and Q10 a four-way join with
-an aggregate on top.
+Q01 a full-table aggregate, Q03 a three-way join, Q12 a two-table join with a
+CASE aggregate, and Q10 a four-way join with an aggregate on top.
 
 Three reps because this bench is noisy in a way the sf=1 numbers hid: the same
 configuration produced 3022 and 4732 ms on separate runs, so a single rep per
@@ -24,15 +24,25 @@ experiment. c6in.8xlarge because it is the smallest instance with a sustained
 rather than burstable network allowance -- on a burstable one a longer boot
 banks credits and flatters whichever side boots slower.
 
-Q10 is deliberately absent. It fails on miniOSv at sf=10, reproducibly and
-identically on two runs -- "TProtocolException: Invalid data" after ~135
-requests -- while the Linux arm runs it fine against the same parquet, so the
-data is good and this is a miniOSv-side bug in its own right rather than
-something to average over. Q12 takes its place; Q05 is also verified working
-at sf=10 if a fifth shape is wanted.
+Q10 is back, as of 2026-09-14. It used to fail on miniOSv at sf=10 -- three
+runs, three different symptoms (thrift "Invalid data", an llfree_put
+assertion, a page fault on freshly mmap'd memory), which is the signature of
+memory corruption rather than of a query. The cause was in the kernel, not in
+mininet: a TLB shootdown skipped the IPI to any cpu that was not running an
+application thread, but the heap gives its 2 MiB pages back to the frame
+allocator, so a cpu inside a kernel thread could hold a stale entry to a frame
+that had already been handed to someone else. Fixed in miniosv 9bc546e1a
+(srg_mainline), merged here as c34e420ef. Verified 3/3 before this experiment
+was re-enabled: 5018, 4517, 4445 ms, 20 rows each.
+
+Q12 was Q10's stand-in and is kept, so this is five shapes rather than the
+original four; Q05 is also verified working at sf=10.
 
 Every query here has been smoke-tested at sf=10 on both arms before being
-listed: Q01, Q03, Q06 and Q12 all complete on miniOSv and on Linux.
+listed: Q01, Q03, Q06, Q10 and Q12 all complete on miniOSv and on Linux.
+
+Numbers taken before 2026-09-14 were produced by a kernel with that corruption
+bug and are not comparable with these, whichever query they name.
 """
 
 bench    = "apps/bench/duckdb-tpch"
@@ -65,5 +75,7 @@ query = 1
 query = 3
 [[points]]
 query = 6
+[[points]]
+query = 10
 [[points]]
 query = 12

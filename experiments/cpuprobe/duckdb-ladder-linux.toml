@@ -1,0 +1,90 @@
+name = "duckdb-ladder-linux"
+title = "DuckDB on Linux: the same CPU ladder, for the numbers to subtract from"
+description = """
+The experiment that found the sf=10 gap, and the one to re-run before
+believing any claim about it.
+
+The matched HTTP-log comparison (query/duckdb-tpch-sf10-*-httplog) had already
+shown that the two stacks fetch the same 979 ranges at the same per-request
+latency -- miniOSv's median read 31 ms against Linux's 27, with a tail an
+order of magnitude shorter -- and that miniOSv nonetheless kept only 13.8
+requests in flight where Linux kept 25.7. With reads issued serially inside
+each scan task, in-flight depth is threads x read/(read + everything-else), so
+a lower depth at equal latency means the work *between* the reads is slower.
+None of that work needs S3, so this arm stops touching it.
+
+The ladder, cheapest question first:
+
+  range_scan  vectorized arithmetic over 1e9 values, allocating almost
+              nothing. Parallelises to ~1.5 threads on either stack, so read
+              it as a single-core speed number and nothing else.
+  hash_agg    the same shape plus a per-thread hash table and its merge.
+  dbgen       three TPC-H tables built in memory: the allocator, under the
+              widest size distribution DuckDB ever asks it for.
+  par_t1      one expensive predicate over 6M lineitem rows, on one thread.
+  par_tall    the same predicate on all of them.
+  q01_local   the queries themselves against in-memory tables, so the same
+  q06_local   plan as the S3 runs with the parquet layer taken out.
+
+`par_t1` / `par_tall` is the whole point: their ratio is the parallel speedup
+the kernel actually delivers. It has to be a table scan rather than range() --
+range() parallelises to about 1.5 threads either way, which is why the two
+steps above it could not have seen this.
+
+Timings come from the CLI's own `.timer`, paired to steps by a `.print`
+marker ahead of each -- dot-commands are not timed, so the Nth marker is
+followed by exactly its own step's Run Time line. It also reports `user_ms`
+and `sys_ms`, and user_ms/real is the same parallelism the miniOSv arm derives
+from per-cpu idle time: 22.4 on par_tall here.
+
+What it found (c6in.8xlarge, 32 vCPU), and then what the fix did:
+
+                    before      after    Linux
+    par_t1          1313.7     1311.8      864
+    par_tall         984.8      237.8       74
+    q01_local        240.7       57.6       17
+    parallelism       4.10      13.47     22.4
+
+Three of 32 cpus were doing anything. `thread::start()` placed every unpinned
+thread on its creator's cpu, and DuckDB builds one worker per cpu from a
+single thread, so all 32 landed on one; the load balancer moves at most one
+thread per 100 ms. Fixed in miniosv da632237e.
+
+dbgen runs at sf=1, not sf=3: sf=3 runs the guest out of memory after 22 s
+("Failed to allocate block of 262144 bytes" on a 64 GiB instance with DuckDB's
+own limit at 50.3 GiB, so a real allocation failure and not the limit). That
+is a separate bug and this experiment is not the place to chase it.
+
+Two reps, because the numbers that matter here differ by 4x and not by noise
+-- par_t1 came back 1313.7 and 1314.6 across two reps before the fix.
+
+Overlay against the Linux arm:
+
+    just plot results/cpuprobe/miniosv/ladder.csv results/cpuprobe/linux/ladder.csv \\
+        --series note --value-col probe_par_tall_ms --ylabel "par_tall (ms)"
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "c6in.8xlarge"
+axis     = "cpuprobe"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+out      = "results/cpuprobe/linux/ladder.csv"
+
+target_ip = ""
+
+value_col = "probe_par_tall_ms"
+ylabel    = "par_tall (ms)"
+unit      = "ms"
+series    = "note"
+
+[fixed]
+
+[env]
+BENCH_NOTE = "Linux"
+
+# One process for the whole ladder, because the miniOSv arm is one process:
+# dbgen builds the tables the four steps after it read.
+[[points]]
+cpuprobe = "1"
