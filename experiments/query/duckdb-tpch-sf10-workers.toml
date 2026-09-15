@@ -1,0 +1,78 @@
+name = "duckdb-tpch-sf10-workers"
+title = "DuckDB-on-miniOSv: is the worker poll loop the depth ceiling? (no)"
+description = """
+A discriminating experiment, kept because it came back negative and the
+negative is what picks the next fix.
+
+After the thread-placement fix and the depth sweep
+(query/duckdb-tpch-sf10-depth), Q06 at sf=10 sits at 1009 ms with in-flight
+depth saturated near 50 -- 45 at 64 DuckDB threads, 47-50 at 96. The slot
+ceiling is workers x conns = 96, so slots are not what binds, and at 96
+threads only half of them are blocked in HTTP. Two explanations fitted, and
+they want different fixes:
+
+  1. compute -- the parallelism still missing after the placement fix
+     (13.5 of 32 against Linux's 22.4) limits how fast a thread finishes
+     decoding and gets back into a request;
+  2. the workers -- each one walks *all* its conns serially in a single
+     thread, so 2 x 48 is a long loop on two cpus and a saturated worker would
+     cap depth however many threads ask for it.
+
+Holding the slot count fixed and moving the split separates them. Both arms of
+this experiment have 96 slots and 96 DuckDB threads; only the split differs.
+
+    2 workers x 48 conns   median 1009 ms   concurrency 48.5
+    4 workers x 24 conns   median 1113 ms   concurrency 45.5   (1145/1082)
+
+**The workers were not the ceiling.** Doubling them did not raise depth --
+45.5 against 48.5 is inside the spread -- and the poll loop demonstrably had
+headroom: `poll_gap_us_avg` falls from 0.74 us to 0.31-0.35 us because each
+worker walks a shorter list, and it bought nothing.
+
+It cost about 10%, which is the other half of the result. Two more spinning
+workers take two more cpus from DuckDB's threads, and Q06 went 1009 -> 1113
+ms. On a query that only uses 1.5-5 cpus of decode that is a bigger price than
+it looks, and it points the same way: cpu time is what this workload is short
+of, not polling capacity.
+
+So the next move is the scheduler rather than the stack, and the depth sweep
+bounds the prize: ~48 -> ~70 would put Q06 near 700 ms against Linux's best of
+1137.
+
+Worth re-running if the worker loop ever changes shape (batched polling, a
+different conn-to-worker mapping), since the conclusion is about this loop and
+not a law.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.8xlarge"
+axis     = "workers"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+out      = "results/query/miniosv/tpch-sf10-workers.csv"
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Q06 latency (ms)"
+unit      = "ms"
+series    = "note"
+
+[fixed]
+sf      = "10"
+query   = 6
+threads = 96
+httplog = "1"
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+# 96 slots either way: conns is per worker, so these are 2x48 and 4x24. The
+# driver rebuilds for each, both knobs being compile-time.
+[[points]]
+workers = 2
+conns   = 48
+[[points]]
+workers = 4
+conns   = 24
