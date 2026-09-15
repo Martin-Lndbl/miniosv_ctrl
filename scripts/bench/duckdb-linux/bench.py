@@ -66,8 +66,28 @@ class DuckdbLinux(Bench):
         # miniOSv compiles in one address; this makes Linux ask the same
         # question instead of spreading over whatever DNS returns.
         "pin": (None, str),
+        # Receive-path parity with mininet. "off" disables GRO, so the stack
+        # sees each frame rather than one coalesced segment; queues sets the
+        # NIC's combined RX/TX count, which is mininet's worker count. Both
+        # empty leave the NIC as the kernel set it up -- the stock arm.
+        "gro": (None, str),
+        "queues": (None, str),
+        # "1" adds a second pass per query with DuckDB's HTTP request log on,
+        # reported as an `HTTP STATS:` line. Diagnostic: it measures requests
+        # inside DuckDB, above whichever client is underneath, which is where
+        # the miniOSv arm can be compared to this one at the same layer.
+        "httplog": (None, str),
+        # "1" swaps the S3 run for the no-network CPU ladder main.cc's
+        # `cpuprobe` executable runs. Same steps, same sizes, same order, so
+        # the two arms' PROBE rows subtract directly.
+        "cpuprobe": (None, str),
+        # DuckDB's thread count. Empty is its own default of one per cpu.
+        # Here because apps/bench/duckdb-tpch has had it all along, and a
+        # tuning knob on one arm only is not a comparison.
+        "threads": (None, int),
     }
-    defaults = {"query": 6, "sf": "1", "pin": ""}
+    defaults = {"query": 6, "sf": "1", "pin": "", "gro": "", "queues": "",
+                "httplog": "", "cpuprobe": "", "threads": 0}
     instance_tag = "duckdb-linux-bench"
     default_instance = "c7i.large"  # matches apps/bench/duckdb-tpch's default
     max_vm_seconds = 300
@@ -75,12 +95,48 @@ class DuckdbLinux(Bench):
     headline_agg = "min"
     headline_unit = "ms"
 
-    metrics = {"pinned_ip": (r"^pinned \S+ -> ([\d.]+)", str)} | {
+    metrics = {"pinned_ip": (r"^pinned \S+ -> ([\d.]+)", str),
+               # Read back off the NIC, not echoed from the request, so these
+               # say what the run actually had rather than what it asked for.
+               "nic_iface": (r"^nic: iface=(\S+)", str),
+               "nic_gro": (r"^nic: iface=\S+ gro=(\S+)", str),
+               "nic_queues": (r"^nic: iface=\S+ gro=\S+ combined=(\d+)", int),
+               "nic_tune_failed": (r"^nic: (FAILED)", str)} | {
         "query_ms": (r"^Q\d+: ([\d.]+) ms,", float),
         "rows": (r"^Q\d+: [\d.]+ ms, (\d+) rows", int),
         "match": (r"^Q\d+: [\d.]+ ms, \d+ rows, match=(\w+)", str),
         "queries_ok": (r"^TPCH SUMMARY: ok=(\d+)", int),
         "queries_total": (r"^TPCH SUMMARY: ok=\d+ total=(\d+)", int),
+        # Same clock as the per-query line, summed. Only a fallback for when
+        # that line does not survive the console; see run_once.
+        "summary_ms": (r"^TPCH SUMMARY: ok=\d+ total=\d+ ms=([\d.]+)", float),
+        # From the httplog pass. `http_concurrency` is the mean number of
+        # requests in flight, which is what decides a latency-bound query and
+        # is directly comparable to the miniOSv arm's net_ms/query_ms.
+        "http_n": (r"^HTTP STATS: .*\bn=(\d+)", int),
+        "http_get": (r"^HTTP STATS: .*\bget=(\d+)", int),
+        "http_head": (r"^HTTP STATS: .*\bhead=(\d+)", int),
+        "http_ms_avg": (r"^HTTP STATS: .*\bms_avg=([\d.]+)", float),
+        "http_ms_p50": (r"^HTTP STATS: .*\bms_p50=([\d.]+)", float),
+        "http_ms_p90": (r"^HTTP STATS: .*\bms_p90=([\d.]+)", float),
+        "http_ms_p99": (r"^HTTP STATS: .*\bms_p99=([\d.]+)", float),
+        "http_ms_max": (r"^HTTP STATS: .*\bms_max=([\d.]+)", float),
+        "http_ms_sum": (r"^HTTP STATS: .*\bms_sum=([\d.]+)", float),
+        "http_window_ms": (r"^HTTP STATS: .*\bwindow_ms=([\d.]+)", float),
+        "http_concurrency": (r"^HTTP STATS: .*\bconcurrency=([\d.]+)", float),
+        "http_profile_ms": (r"^HTTP STATS: .*\bprofile_ms=([\d.]+)", float),
+        "http_failed": (r"^HTTP STATS: (FAILED)", str),
+        # From the cpuprobe ladder. Named per step so one CSV row holds the
+        # whole ladder and the two arms' rows subtract column by column.
+        "probe_range_scan_ms": (r"^PROBE: name=range_scan ms=([\d.]+)", float),
+        "probe_hash_agg_ms": (r"^PROBE: name=hash_agg ms=([\d.]+)", float),
+        "probe_dbgen_ms": (r"^PROBE: name=dbgen ms=([\d.]+)", float),
+        "probe_par_t1_ms": (r"^PROBE: name=par_t1 ms=([\d.]+)", float),
+        "probe_par_tall_ms": (r"^PROBE: name=par_tall ms=([\d.]+)", float),
+        "probe_q01_local_ms": (r"^PROBE: name=q01_local ms=([\d.]+)", float),
+        "probe_q06_local_ms": (r"^PROBE: name=q06_local ms=([\d.]+)", float),
+        "probe_failed": (r"^PROBE: name=\S+ (FAILED)", str),
+        "cpuprobe_ok": (r"^(?:IN)?COMPLETE: cpuprobe ok=(\d+)", int),
         "checked": (r"checked=(\d+)", int),
         "matched": (r"matched=(\d+)", int),
     }
@@ -126,6 +182,11 @@ class DuckdbLinux(Bench):
             "BENCH_SF": str(cfg["sf"]),
             "BENCH_QUERIES": str(cfg["query"]),
             "BENCH_PIN_IP": str(cfg.get("pin") or ""),
+            "BENCH_GRO": str(cfg.get("gro") or ""),
+            "BENCH_NIC_QUEUES": str(cfg.get("queues") or ""),
+            "BENCH_HTTP_LOG": str(cfg.get("httplog") or ""),
+            "BENCH_CPU_PROBE": str(cfg.get("cpuprobe") or ""),
+            "BENCH_THREADS": str(cfg.get("threads") or ""),
         }
         body = (SCRIPTS / "instance.py").read_text()
         body = body.split("\n", 1)[1] if body.startswith("#!") else body
@@ -199,10 +260,46 @@ class DuckdbLinux(Bench):
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["instance_id"] = iid
         row["log"] = log.name
+
+        # The serial console is not line-atomic: a kernel message can land on
+        # top of the "Qnn: ... ms" line and take the run's only number with it,
+        # leaving a row that completed but measures nothing. TPCH SUMMARY's
+        # ms is the same clock summed over the queries, so for a single-query
+        # run it is that number exactly -- recover it rather than spend another
+        # instance, and record that it was recovered.
+        if row.get("query_ms") is None and row.get("queries_total") == 1 \
+                and row.get("summary_ms") is not None:
+            row["query_ms"] = row["summary_ms"]
+            row["query_ms_from_summary"] = True
         return row
 
     def valid(self, row: dict) -> bool:
-        return bool(row.get("complete")) and row.get("match") != "no"
+        if not bool(row.get("complete")):
+            return False
+        # A cpuprobe row has no query and no answer to match; what it must
+        # have is every step of the ladder, because a row missing one is a row
+        # whose columns cannot be subtracted from the other arm's.
+        if str(row.get("cpuprobe") or "") == "1":
+            return row.get("probe_failed") is None and row.get("cpuprobe_ok") == 7
+        if row.get("match") == "no":
+            return False
+        # A run that completed but whose timing never reached us is not a data
+        # point. Without this it counts toward "n valid" while contributing an
+        # empty cell, so the plot quietly draws a box over fewer reps than the
+        # caption claims.
+        if row.get("query_ms") is None:
+            return False
+        # A parity run whose NIC tune did not take is not a parity run. Compare
+        # what came back off the device against what was asked for, so a
+        # missing ethtool or a queue count the driver clamped shows up as an
+        # invalid row rather than as a number next to the miniOSv one.
+        if row.get("nic_tune_failed"):
+            return False
+        if row.get("gro") and str(row["gro"]) != str(row.get("nic_gro")):
+            return False
+        if row.get("queues") and int(row["queues"]) != (row.get("nic_queues") or -1):
+            return False
+        return True
 
 
 def main() -> None:

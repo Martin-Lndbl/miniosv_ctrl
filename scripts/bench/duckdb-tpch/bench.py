@@ -42,6 +42,10 @@ CRASH = re.compile(
     re.M,
 )
 IMAGE = MINIOSV / "build/release.x64/loader.img"
+# probe_steps[] in app/miniduckdb/miniosv/main.cc, and PROBE_STEPS in
+# competitors/duckdb-linux/scripts/instance.py. All three move together.
+PROBE_STEP_NAMES = ("dbgen", "range_scan", "hash_agg", "par_t1",
+                    "par_tall", "q01_local", "q06_local")
 
 
 class DuckdbTpch(Bench):
@@ -59,6 +63,16 @@ class DuckdbTpch(Bench):
         # until the guest's frame allocator is under pressure. "" is DuckDB's
         # own default.
         "memlimit": (None, str),
+        # boot arg -- "1" turns on DuckDB's own HTTP request log and adds an
+        # `HTTP STATS:` line per query. Diagnostic, and it changes the run it
+        # measures: a formatted log record per request is not free, so these
+        # rows are comparable to competitors/duckdb-linux's `httplog` pass and
+        # to nothing else.
+        "httplog": (None, str),
+        # boot arg -- "1" boots the `cpuprobe` executable instead of `tpch`:
+        # the same ladder competitors/duckdb-linux runs under BENCH_CPU_PROBE,
+        # with no network in it at all.
+        "cpuprobe": (None, str),
         "workers": ("MININET_WORKERS", int),  # compiled in
         "conns": ("MININET_CONNS", int),  # compiled in
         "tls": ("MININET_TLS", int),  # compiled in -- 0 dials plain HTTP:80
@@ -68,6 +82,8 @@ class DuckdbTpch(Bench):
         "sf": "1",
         "threads": 0,
         "memlimit": "",
+        "httplog": "",
+        "cpuprobe": "",
         "workers": 2,
         "conns": 8,
         "tls": 1,
@@ -94,6 +110,8 @@ class DuckdbTpch(Bench):
         "net_ms": (r"^Q\d+: .*net_ms=([\d.]+)", float),
         "net_calls": (r"^Q\d+: .*net_calls=(\d+)", int),
         "memory_limit": (r"^memory: limit=(\S+)", str),
+        "buf_cap_max": (r"^BUF STATS: cap_max=(\d+)", int),
+        "requests_retried": (r"^BUF STATS: .*retried=(\d+)", int),
         "hw_concurrency": (r"^cpus: hw_concurrency=(\d+)", int),
         "duckdb_threads": (r"^cpus: .*duckdb_threads=(\d+)", int),
         "requests": (r"^CONN STATS: requests=(\d+)", int),
@@ -124,6 +142,12 @@ class DuckdbTpch(Bench):
         "tx_ns_max": (r"^TX STATS: .*tx_ns_max=(\d+)", int),
         # ttfb is S3 think time plus a round trip; xfer is the actual
         # transfer. Which dominates decides whether bandwidth matters at all.
+        # Worker publishes a result -> submitting thread running again. The
+        # only part of a request that neither wire nor ttfb+xfer covers.
+        "wake_n": (r"^WAKE STATS: n=(\d+)", int),
+        "wake_ns_avg": (r"^WAKE STATS: .*\bns_avg=(\d+)", int),
+        "wake_us_max": (r"^WAKE STATS: .*\bus_max=([\d.]+)", float),
+        "wake_ms_total": (r"^WAKE STATS: .*\bms_total=([\d.]+)", float),
         "ttfb_us_avg": (r"^LATENCY STATS: ttfb_us_avg=(\d+)", int),
         "xfer_us_avg": (r"^LATENCY STATS: .*xfer_us_avg=(\d+)", int),
         # Frames lost below smoltcp. imissed is the device dropping for want of
@@ -136,6 +160,57 @@ class DuckdbTpch(Bench):
         "tx_burst_fail": (r"^DROP STATS: .*tx_burst_fail=(\d+)", int),
         "nic_ipackets": (r"^DROP STATS: .*ipackets=(\d+)", int),
         "nic_ibytes": (r"^DROP STATS: .*ibytes=(\d+)", int),
+        # From the httplog pass, and named to match the Linux arm's columns
+        # exactly. `http_concurrency` is ms_sum/window_ms -- the mean number
+        # of requests in flight, which is what a latency-bound query turns on.
+        "http_n": (r"^HTTP STATS: .*\bn=(\d+)", int),
+        "http_get": (r"^HTTP STATS: .*\bget=(\d+)", int),
+        "http_head": (r"^HTTP STATS: .*\bhead=(\d+)", int),
+        "http_ms_avg": (r"^HTTP STATS: .*\bms_avg=([\d.]+)", float),
+        "http_ms_p50": (r"^HTTP STATS: .*\bms_p50=([\d.]+)", float),
+        "http_ms_p90": (r"^HTTP STATS: .*\bms_p90=([\d.]+)", float),
+        "http_ms_p99": (r"^HTTP STATS: .*\bms_p99=([\d.]+)", float),
+        "http_ms_max": (r"^HTTP STATS: .*\bms_max=([\d.]+)", float),
+        "http_ms_sum": (r"^HTTP STATS: .*\bms_sum=([\d.]+)", float),
+        "http_window_ms": (r"^HTTP STATS: .*\bwindow_ms=([\d.]+)", float),
+        "http_concurrency": (r"^HTTP STATS: .*\bconcurrency=([\d.]+)", float),
+        "http_failed": (r"^HTTP STATS: (FAILED)", str),
+        # Broadcast TLB invalidation as this run actually paid for it. A
+        # shootdown is one global mutex plus a wait on every other cpu's IPI,
+        # so ms_total is directly comparable to the thread-time a query spends
+        # outside its reads.
+        "tlb_shootdowns": (r"^TLB STATS: shootdowns=(\d+)", int),
+        "tlb_pages": (r"^TLB STATS: .*\bpages=(\d+)", int),
+        "tlb_all": (r"^TLB STATS: .*\ball=(\d+)", int),
+        "tlb_ms_total": (r"^TLB STATS: .*\bms_total=([\d.]+)", float),
+        "tlb_us_max": (r"^TLB STATS: .*\bus_max=([\d.]+)", float),
+        "tlb_us_avg": (r"^TLB STATS: .*\bus_avg=([\d.]+)", float),
+        # Demand paging, the other half of the memory bill. Concurrent across
+        # cpus, so ms_total is thread-time and can exceed the wall clock.
+        "fault_count": (r"^FAULT STATS: faults=(\d+)", int),
+        "fault_sigsegv": (r"^FAULT STATS: .*\bsigsegv=(\d+)", int),
+        "fault_ms_total": (r"^FAULT STATS: .*\bms_total=([\d.]+)", float),
+        "fault_us_max": (r"^FAULT STATS: .*\bus_max=([\d.]+)", float),
+        "fault_ns_avg": (r"^FAULT STATS: .*\bns_avg=([\d.]+)", float),
+        # From the cpuprobe ladder. Named per step so one CSV row holds the
+        # whole ladder and the two arms' rows subtract column by column.
+        "probe_range_scan_ms": (r"^PROBE: name=range_scan ms=([\d.]+)", float),
+        "probe_hash_agg_ms": (r"^PROBE: name=hash_agg ms=([\d.]+)", float),
+        "probe_dbgen_ms": (r"^PROBE: name=dbgen ms=([\d.]+)", float),
+        "probe_par_t1_ms": (r"^PROBE: name=par_t1 ms=([\d.]+)", float),
+        "probe_par_tall_ms": (r"^PROBE: name=par_tall ms=([\d.]+)", float),
+        "probe_q01_local_ms": (r"^PROBE: name=q01_local ms=([\d.]+)", float),
+        "probe_q06_local_ms": (r"^PROBE: name=q06_local ms=([\d.]+)", float),
+        # How many cpus carried each ladder step, from their idle threads.
+        # parallelism is (cpus x wall - idle) / wall, the same quantity the
+        # Linux arm reports as user_ms/real.
+        "cpus_par_t1": (r"^CPUS: name=par_t1 .*parallelism=([\d.]+)", float),
+        "cpus_par_tall": (r"^CPUS: name=par_tall .*parallelism=([\d.]+)", float),
+        "cpus_busy_par_tall": (r"^CPUS: name=par_tall busy=(\d+)", int),
+        "cpus_q01_local": (r"^CPUS: name=q01_local .*parallelism=([\d.]+)", float),
+        "cpus_dbgen": (r"^CPUS: name=dbgen .*parallelism=([\d.]+)", float),
+        "probe_failed": (r"^PROBE: name=\S+ (FAILED)", str),
+        "cpuprobe_ok": (r"^(?:IN)?COMPLETE: cpuprobe ok=(\d+)", int),
     }
 
     def summary(self, row: dict) -> str:
@@ -212,7 +287,16 @@ class DuckdbTpch(Bench):
         # threads=0 means "DuckDB's own default"; don't pass the flag at all.
         thr = f" --threads {cfg['threads']}" if cfg.get("threads") else ""
         mem = f" --memlimit {cfg['memlimit']}" if cfg.get("memlimit") else ""
-        args = f"tpch --sf {cfg['sf']}{thr}{mem} {cfg['query']}"
+        hlog = " --httplog" if str(cfg.get("httplog") or "") == "1" else ""
+        # A different executable, not a flag on tpch: the ladder shares only
+        # the thread count with it, and asking `tpch` to ignore --sf, the
+        # query list and the bucket would make its argument parse a lie.
+        if str(cfg.get("cpuprobe") or "") == "1":
+            # No thread count: the ladder's par_t1/par_tall pair is what sets
+            # it, and overriding it would make par_tall mean something else.
+            args = "cpuprobe"
+        else:
+            args = f"tpch --sf {cfg['sf']}{thr}{mem}{hlog} {cfg['query']}"
         r = subprocess.run(
             [sys.executable, str(MINIOSV / "scripts/setargs.py"), str(IMAGE), args],
             capture_output=True,
@@ -309,8 +393,18 @@ class DuckdbTpch(Bench):
     def valid(self, row: dict) -> bool:
         """No conns/syn_retries here (that is the network stack's own gate,
         exercised by smoltcp-s3); this bench's gate is the guest's own verdict
-        plus, when the scale factor had a canned answer, that it matched."""
-        return bool(row.get("complete")) and row.get("match") != "no"
+        plus, when the scale factor had a canned answer, that it matched.
+
+        A cpuprobe row has no query and no answer to match; what it must have
+        is every step of the ladder, because a row missing one is a row whose
+        columns cannot be subtracted from the other arm's."""
+        if not bool(row.get("complete")):
+            return False
+        if str(row.get("cpuprobe") or "") == "1":
+            return row.get("probe_failed") is None and row.get("cpuprobe_ok") == len(
+                PROBE_STEP_NAMES
+            )
+        return row.get("match") != "no"
 
 
 if __name__ == "__main__":
