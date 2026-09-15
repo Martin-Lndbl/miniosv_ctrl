@@ -209,6 +209,14 @@ class DuckdbTpch(Bench):
         "cpus_busy_par_tall": (r"^CPUS: name=par_tall busy=(\d+)", int),
         "cpus_q01_local": (r"^CPUS: name=q01_local .*parallelism=([\d.]+)", float),
         "cpus_dbgen": (r"^CPUS: name=dbgen .*parallelism=([\d.]+)", float),
+        # The same accounting around a TPC-H query rather than a ladder step.
+        # `q\d\d` and not `q01_local`, which is the ladder's in-memory Q01 --
+        # a sweep runs one query per instance, so one pattern covers whichever
+        # it was. Read it against the same run's time inside HTTP: sf=10 comes
+        # back at 3.5-7.0, which is 1.5-5 cpus of decode behind a wall of
+        # waiting, and says the compute stage is no longer the constraint.
+        "cpus_query": (r"^CPUS: name=q\d\d .*parallelism=([\d.]+)", float),
+        "cpus_query_busy": (r"^CPUS: name=q\d\d busy=(\d+)", int),
         "probe_failed": (r"^PROBE: name=\S+ (FAILED)", str),
         "cpuprobe_ok": (r"^(?:IN)?COMPLETE: cpuprobe ok=(\d+)", int),
     }
