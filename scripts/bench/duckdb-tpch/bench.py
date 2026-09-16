@@ -44,8 +44,8 @@ CRASH = re.compile(
 IMAGE = MINIOSV / "build/release.x64/loader.img"
 # probe_steps[] in app/miniduckdb/miniosv/main.cc, and PROBE_STEPS in
 # competitors/duckdb-linux/scripts/instance.py. All three move together.
-PROBE_STEP_NAMES = ("dbgen", "range_scan", "hash_agg", "par_t1",
-                    "par_tall", "q01_local", "q06_local")
+PROBE_STEP_NAMES = ("dbgen", "range_scan", "hash_agg", "par_t1", "par_tall",
+                    "par_t1_4x", "par_tall_4x", "q01_local", "q06_local")
 
 
 class DuckdbTpch(Bench):
@@ -199,6 +199,8 @@ class DuckdbTpch(Bench):
         "probe_dbgen_ms": (r"^PROBE: name=dbgen ms=([\d.]+)", float),
         "probe_par_t1_ms": (r"^PROBE: name=par_t1 ms=([\d.]+)", float),
         "probe_par_tall_ms": (r"^PROBE: name=par_tall ms=([\d.]+)", float),
+        "probe_par_t1_4x_ms": (r"^PROBE: name=par_t1_4x ms=([\d.]+)", float),
+        "probe_par_tall_4x_ms": (r"^PROBE: name=par_tall_4x ms=([\d.]+)", float),
         "probe_q01_local_ms": (r"^PROBE: name=q01_local ms=([\d.]+)", float),
         "probe_q06_local_ms": (r"^PROBE: name=q06_local ms=([\d.]+)", float),
         # How many cpus carried each ladder step, from their idle threads.

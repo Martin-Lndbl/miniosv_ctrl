@@ -133,6 +133,8 @@ class DuckdbLinux(Bench):
         "probe_dbgen_ms": (r"^PROBE: name=dbgen ms=([\d.]+)", float),
         "probe_par_t1_ms": (r"^PROBE: name=par_t1 ms=([\d.]+)", float),
         "probe_par_tall_ms": (r"^PROBE: name=par_tall ms=([\d.]+)", float),
+        "probe_par_t1_4x_ms": (r"^PROBE: name=par_t1_4x ms=([\d.]+)", float),
+        "probe_par_tall_4x_ms": (r"^PROBE: name=par_tall_4x ms=([\d.]+)", float),
         "probe_q01_local_ms": (r"^PROBE: name=q01_local ms=([\d.]+)", float),
         "probe_q06_local_ms": (r"^PROBE: name=q06_local ms=([\d.]+)", float),
         "probe_failed": (r"^PROBE: name=\S+ (FAILED)", str),
@@ -280,7 +282,7 @@ class DuckdbLinux(Bench):
         # have is every step of the ladder, because a row missing one is a row
         # whose columns cannot be subtracted from the other arm's.
         if str(row.get("cpuprobe") or "") == "1":
-            return row.get("probe_failed") is None and row.get("cpuprobe_ok") == 7
+            return row.get("probe_failed") is None and row.get("cpuprobe_ok") == 9
         if row.get("match") == "no":
             return False
         # A run that completed but whose timing never reached us is not a data
