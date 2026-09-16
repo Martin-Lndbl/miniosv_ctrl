@@ -253,7 +253,25 @@ class DuckdbTpch(Bench):
             boto3.client("s3", region_name=os.environ["AWS_REGION"]).head_object(
                 Bucket=bucket, Key=key
             )
-        except Exception:
+        except Exception as e:
+            # A bare `except` here used to report every failure as missing
+            # data, which is wrong for the most common one: an expired
+            # session. That message sent me looking for a deleted bucket
+            # prefix when the credentials had simply timed out after a long
+            # run. Anything that is not a 404 is reported as itself.
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            status = (
+                getattr(e, "response", {})
+                .get("ResponseMetadata", {})
+                .get("HTTPStatusCode")
+            )
+            if code not in ("404", "NoSuchKey", "NotFound") and status != 404:
+                raise SystemExit(
+                    f"could not check s3://{bucket}/{key}: {type(e).__name__}: {e}\n"
+                    f"This is not 'the data is missing' -- the request did not "
+                    f"get far enough to say. An expired session is the usual "
+                    f"cause after a long run; re-authenticate and try again."
+                )
             raise SystemExit(
                 f"no TPC-H data at sf={sf} in s3://{bucket} (looked for {key}).\n"
                 f"Generate and upload it with:\n"
