@@ -66,6 +66,7 @@ Overlay against the Linux arm:
 bench    = "apps/bench/duckdb-tpch"
 instance = "c6in.8xlarge"
 axis     = "cpuprobe"
+grid     = { cpuprobe = [1] }
 reps     = 2
 cooldown = 0
 max_vm_seconds = 900
@@ -86,5 +87,3 @@ BENCH_NOTE = "miniOSv"
 
 # The ladder takes no thread count of its own -- par_t1/par_tall set it -- and
 # reads no bucket, so `sf` and `query` are along for the ride only.
-[[points]]
-cpuprobe = "1"

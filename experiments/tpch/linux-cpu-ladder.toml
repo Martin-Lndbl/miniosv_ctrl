@@ -67,6 +67,7 @@ Overlay against the Linux arm:
 bench    = "competitors/duckdb-linux"
 instance = "c6in.8xlarge"
 axis     = "cpuprobe"
+grid     = { cpuprobe = [1] }
 reps     = 2
 cooldown = 0
 max_vm_seconds = 900
@@ -85,5 +86,3 @@ BENCH_NOTE = "Linux"
 
 # One process for the whole ladder, because the miniOSv arm is one process:
 # dbgen builds the tables the four steps after it read.
-[[points]]
-cpuprobe = "1"

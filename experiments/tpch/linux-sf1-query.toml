@@ -32,6 +32,7 @@ miniOSv additionally runs 2 mininet polling workers, which do not yield.
 bench    = "competitors/duckdb-linux"
 instance = "c6in.2xlarge"
 axis     = "query"
+grid     = { query = [1, 3, 6, 10, 12] }
 reps     = 3
 cooldown = 0
 max_vm_seconds = 300
@@ -50,14 +51,3 @@ pin = ""
 
 [env]
 BENCH_NOTE = "Linux"
-
-[[points]]
-query = 1
-[[points]]
-query = 3
-[[points]]
-query = 6
-[[points]]
-query = 10
-[[points]]
-query = 12

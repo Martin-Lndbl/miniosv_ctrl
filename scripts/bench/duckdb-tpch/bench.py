@@ -111,7 +111,6 @@ class DuckdbTpch(Bench):
         "net_ms": (r"^Q\d+: .*net_ms=([\d.]+)", float),
         "net_calls": (r"^Q\d+: .*net_calls=(\d+)", int),
         "memory_limit": (r"^memory: limit=(\S+)", str),
-        "buf_cap_max": (r"^BUF STATS: cap_max=(\d+)", int),
         "requests_retried": (r"^BUF STATS: .*retried=(\d+)", int),
         "hw_concurrency": (r"^cpus: hw_concurrency=(\d+)", int),
         "duckdb_threads": (r"^cpus: .*duckdb_threads=(\d+)", int),
@@ -129,20 +128,14 @@ class DuckdbTpch(Bench):
         "poll_gaps_over_1ms": (r"^POLL STATS: .*gaps_over_1ms=(\d+)", int),
         "poll_busy_us_max": (r"^POLL STATS: .*busy_us_max=(\d+)", int),
         "poll_loop_us_max": (r"^POLL STATS: .*loop_us_max=(\d+)", int),
+        "iface_us_max": (r"^STALL STATS: iface_us_max=(\d+)", int),
+        "steps_us_max": (r"^STALL STATS: .*steps_us_max=(\d+)", int),
         # SYN to Established is one round trip, so setup_us_avg is the measured
         # RTT -- the divisor in any window-limited throughput estimate.
         "conns_established": (r"^SETUP STATS: conns=(\d+)", int),
         "conns_failed": (r"^SETUP STATS: .*failed=(\d+)", int),
         "syn_retries": (r"^SETUP STATS: .*syn_retries=(\d+)", int),
         "setup_us_avg": (r"^SETUP STATS: .*setup_us_avg=(\d+)", int),
-        # drain_avg near one MSS means the peer sends a segment and waits;
-        # tx_ns_avg near the RTT would mean our own ACK is what paces it.
-        "recv_drains": (r"^RECV STATS: drains=(\d+)", int),
-        "recv_drain_avg": (r"^RECV STATS: .*drain_avg=(\d+)", int),
-        "recv_queue_max": (r"^RECV STATS: .*queue_max=(\d+)", int),
-        "tx_calls": (r"^TX STATS: calls=(\d+)", int),
-        "tx_ns_avg": (r"^TX STATS: .*tx_ns_avg=(\d+)", int),
-        "tx_ns_max": (r"^TX STATS: .*tx_ns_max=(\d+)", int),
         # ttfb is S3 think time plus a round trip; xfer is the actual
         # transfer. Which dominates decides whether bandwidth matters at all.
         # Worker publishes a result -> submitting thread running again. The
@@ -183,18 +176,7 @@ class DuckdbTpch(Bench):
         # so ms_total is directly comparable to the thread-time a query spends
         # outside its reads.
         "tlb_shootdowns": (r"^TLB STATS: shootdowns=(\d+)", int),
-        "tlb_pages": (r"^TLB STATS: .*\bpages=(\d+)", int),
-        "tlb_all": (r"^TLB STATS: .*\ball=(\d+)", int),
-        "tlb_ms_total": (r"^TLB STATS: .*\bms_total=([\d.]+)", float),
-        "tlb_us_max": (r"^TLB STATS: .*\bus_max=([\d.]+)", float),
-        "tlb_us_avg": (r"^TLB STATS: .*\bus_avg=([\d.]+)", float),
-        # Demand paging, the other half of the memory bill. Concurrent across
-        # cpus, so ms_total is thread-time and can exceed the wall clock.
-        "fault_count": (r"^FAULT STATS: faults=(\d+)", int),
-        "fault_sigsegv": (r"^FAULT STATS: .*\bsigsegv=(\d+)", int),
-        "fault_ms_total": (r"^FAULT STATS: .*\bms_total=([\d.]+)", float),
-        "fault_us_max": (r"^FAULT STATS: .*\bus_max=([\d.]+)", float),
-        "fault_ns_avg": (r"^FAULT STATS: .*\bns_avg=([\d.]+)", float),
+        "tlb_worker_ipis": (r"^TLB STATS: .*\bworker_ipis=(\d+)", int),
         # From the cpuprobe ladder. Named per step so one CSV row holds the
         # whole ladder and the two arms' rows subtract column by column.
         "probe_range_scan_ms": (r"^PROBE: name=range_scan ms=([\d.]+)", float),

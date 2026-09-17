@@ -28,6 +28,7 @@ so 4 x 6 x 3 = 72 runs is ~$3 and about 90 minutes.
 bench    = "apps/bench/duckdb-tpch"
 instance = "c6in.8xlarge"
 axis     = "threads"
+grid     = { query = [1, 6, 9, 18], threads = [32, 64, 96, 128, 160, 192] }
 reps     = 3
 cooldown = 0
 max_vm_seconds = 900
@@ -48,76 +49,3 @@ conns   = 96
 
 [env]
 BENCH_NOTE = "miniOSv"
-
-[[points]]
-query = 1
-threads = 32
-[[points]]
-query = 1
-threads = 64
-[[points]]
-query = 1
-threads = 96
-[[points]]
-query = 1
-threads = 128
-[[points]]
-query = 1
-threads = 160
-[[points]]
-query = 1
-threads = 192
-[[points]]
-query = 6
-threads = 32
-[[points]]
-query = 6
-threads = 64
-[[points]]
-query = 6
-threads = 96
-[[points]]
-query = 6
-threads = 128
-[[points]]
-query = 6
-threads = 160
-[[points]]
-query = 6
-threads = 192
-[[points]]
-query = 9
-threads = 32
-[[points]]
-query = 9
-threads = 64
-[[points]]
-query = 9
-threads = 96
-[[points]]
-query = 9
-threads = 128
-[[points]]
-query = 9
-threads = 160
-[[points]]
-query = 9
-threads = 192
-[[points]]
-query = 18
-threads = 32
-[[points]]
-query = 18
-threads = 64
-[[points]]
-query = 18
-threads = 96
-[[points]]
-query = 18
-threads = 128
-[[points]]
-query = 18
-threads = 160
-[[points]]
-query = 18
-threads = 192

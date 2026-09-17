@@ -23,6 +23,7 @@ earlier sweep.
 bench    = "apps/bench/duckdb-tpch"
 instance = "c6in.2xlarge"
 axis     = "workers"
+grid     = { workers = [1, 2, 4] }
 reps     = 3
 cooldown = 0
 max_vm_seconds = 300
@@ -40,10 +41,3 @@ conns = 16
 
 [env]
 BENCH_NOTE = "miniOSv+park"
-
-[[points]]
-workers = 1
-[[points]]
-workers = 2
-[[points]]
-workers = 4

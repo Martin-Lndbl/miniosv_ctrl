@@ -12,6 +12,7 @@ invocation into that CSV, keyed by (axis, axis_value, rep).
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import shlex
 import subprocess
@@ -69,6 +70,10 @@ def load(name: str) -> dict:
             f"path ({out_path(x).relative_to(ROOT)}). Drop the key; to write "
             f"somewhere else, call the bench driver directly."
         )
+    # `grid = { query = [1, 6], threads = [32, 64] }` is the cartesian product;
+    # `[[points]]` remains for knobs that co-vary.
+    if grid := x.get("grid"):
+        x["points"] = [dict(zip(grid, v)) for v in itertools.product(*grid.values())]
     if not ({"deploy", "prep"} & x.keys()) and not ({"axis", "points"} <= x.keys()):
         raise SystemExit(f"{qualified(path)} is a sweep but has no `axis`/`points`")
     return x
@@ -136,7 +141,6 @@ def main() -> int:
             f"`just setup {x['bench']}` once, then retry"
         )
 
-    env = {**os.environ, **{k: str(v) for k, v in x.get("env", {}).items()}}
     fixed = x.get("fixed", {})
     # Once per experiment: S3 front-ends do not perform alike.
     ip = x.get("target_ip") or runner.target_ip()
@@ -156,6 +160,8 @@ def main() -> int:
 
     for i, point in enumerate(points):
         cfg = {**fixed, **point}
+        # A note may name the point: BENCH_NOTE = "miniOSv, {threads} threads".
+        env = {**os.environ, **{k: str(v).format(**cfg) for k, v in x.get("env", {}).items()}}
         instance = str(cfg.pop("instance", x["instance"])) if axis != "instance" else x["instance"]
         held = [s for k, v in cfg.items() if k != axis for s in (f"--{k}", str(v))]
         cmd = [

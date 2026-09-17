@@ -1,0 +1,38 @@
+name = "linux-sf10-query4-parity"
+title = "DuckDB on Linux at receive parity: TPC-H latency on the four suite queries, sf=10"
+description = """
+One stack's half of the comparison on the queries miniosv-sf10-thread-suite
+chose (Q01, Q06, Q09, Q18), at DuckDB's default thread count (32, the cpu
+count) and at 64, the suite's optimum on miniOSv. `threads` is DuckDB's own
+setting, so both stacks get the same knob. Run the two halves at the same
+time (two instances, one per stack), so S3's drift lands on both alike.
+
+    just plot results/tpch/miniosv-sf10-query4.csv results/tpch/linux-sf10-query4-parity.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "c6in.8xlarge"
+axis     = "query"
+grid     = { threads = [32, 64], query = [1, 6, 9, 18] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf     = "10"
+pin    = ""
+gro    = "off"
+queues = "2"
+
+[env]
+BENCH_NOTE = "Linux (GRO off, 2 queues), {threads} threads"

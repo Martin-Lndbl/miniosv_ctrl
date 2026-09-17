@@ -5,6 +5,7 @@ description = "How far does the stack ride the machine it is given?"
 bench    = "apps/bench/smoltcp-s3"
 instance = ""  # overridden per point; the axis is the machine
 axis     = "instance"
+grid     = { instance = [c6in.large, c6in.xlarge, c6in.2xlarge, c6in.4xlarge, c6in.8xlarge, c6in.16xlarge] }
 reps     = 3
 cooldown = 0
 max_vm_seconds = 180
@@ -24,15 +25,3 @@ AWS_BUCKET_SIZE = "10G"
 # they reach 25-50 on network credits, and a ~30 s run never leaves that window.
 # Those four measure burst, not what the machine sustains. Only 8xlarge (50) and
 # 16xlarge (100) are credit-free. Read the small end as an upper bound.
-[[points]]
-instance = "c6in.large"
-[[points]]
-instance = "c6in.xlarge"
-[[points]]
-instance = "c6in.2xlarge"
-[[points]]
-instance = "c6in.4xlarge"
-[[points]]
-instance = "c6in.8xlarge"
-[[points]]
-instance = "c6in.16xlarge"
