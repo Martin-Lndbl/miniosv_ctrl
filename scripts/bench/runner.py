@@ -18,8 +18,9 @@ ROOT = Path(__file__).resolve().parents[2]
 # Sweepable, but a runner parameter rather than a compiled-in knob: the image is
 # identical at every point, only the machine it is deployed to changes.
 INSTANCE_AXIS = "instance"
-# Connection setup on an unloaded path, ms/conn.
-SETUP_BASELINE_MS = 2.6
+# One SYN-to-Established round trip on an unloaded path, us. The duckdb-tpch
+# arm, which dials on demand and so never queues, measures 1.1-1.2 ms.
+SETUP_BASELINE_US = 1200
 
 
 def notify(msg: str, title: str, tags: str = "") -> None:
@@ -75,11 +76,27 @@ COMMON_METRICS = {
     "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
     "conns_clean": (r"^connections\s+: (\d+)/", int),
     "conns_total": (r"^connections\s+: \d+/(\d+)", int),
-    "syn_retries": (r"^syn retries\s+: (\d+)", int),
     "misrouted": (r"^misrouted rx\s+: (\d+)", int),
-    "setup_ms": (r"^setup\s+: (\d+) ms", int),
-    # setup_ms sums overlapping waits, so it is a marker, not a duration that
-    # can be subtracted from elapsed_s. These are the wall-clock pair.
+    # SYN on the wire to Established: one round trip, per connection, so these
+    # are durations something actually waited. The old `setup_ms` measured from
+    # `connect` instead, which charged every connection for the construction of
+    # all the ones behind it in the dial loop -- a conns^2/2 sum, not a time.
+    "setup_conns": (r"^SETUP STATS\s*: conns=(\d+)", int),
+    "setup_failed": (r"^SETUP STATS\s*: .*failed=(\d+)", int),
+    "setup_us_avg": (r"^SETUP STATS\s*: .*us_avg=(\d+)", int),
+    "setup_us_p50": (r"^SETUP STATS\s*: .*us_p50=(\d+)", int),
+    "setup_us_p90": (r"^SETUP STATS\s*: .*us_p90=(\d+)", int),
+    "setup_us_max": (r"^SETUP STATS\s*: .*us_max=(\d+)", int),
+    # The CPU half: building a connection before its SYN can go out. loop_ms is
+    # the worst worker's dial loop -- wall time in which no SYN could leave.
+    "dial_n": (r"^DIAL STATS\s*: dials=(\d+)", int),
+    "dial_us_avg": (r"^DIAL STATS\s*: .*us_avg=(\d+)", int),
+    "dial_us_p50": (r"^DIAL STATS\s*: .*us_p50=(\d+)", int),
+    "dial_us_p90": (r"^DIAL STATS\s*: .*us_p90=(\d+)", int),
+    "dial_us_max": (r"^DIAL STATS\s*: .*us_max=(\d+)", int),
+    "dial_loop_ms": (r"^DIAL STATS\s*: .*loop_ms=([\d.]+)", float),
+    # The wall-clock pair: what a fetch costs end to end, and what the stack
+    # sustains once the connections exist.
     "gbps_transfer": (r"TRANSFER:.*?, ([\d.]+) Gbps", float),
     "setup_wall_s": (r"TRANSFER:.*?\(setup ([\d.]+) s excluded\)", float),
     "bytes": (r"\((\d+) bytes\)", int),
@@ -149,8 +166,10 @@ class Bench:
             f"{row.get('gbps')} Gbps, {row.get('workers_actual')} workers, "
             f"{row.get('conns_clean')}/{row.get('conns_total')} clean"
         )
-        if row.get("setup_ms") is not None:
-            s += f", setup {row['setup_ms']} ms"
+        if row.get("setup_us_p50") is not None:
+            s += f", setup p50 {row['setup_us_p50']} us"
+        if row.get("dial_loop_ms") is not None:
+            s += f", dial loop {row['dial_loop_ms']} ms"
         return s
 
     # -- shared -------------------------------------------------------------
@@ -165,10 +184,17 @@ class Bench:
         return [i["InstanceId"] for x in r["Reservations"] for i in x["Instances"]]
 
     def valid(self, row: dict) -> bool:
-        """The baseline prints syn_retries/misrouted as 0 so this gate is shared."""
+        """The baseline prints misrouted as 0 so this gate is shared.
+
+        No syn_retries here: smoltcp does not expose a retransmit count, and
+        the counter that used to stand in for one was hardcoded to 1 attempt,
+        so it read 0 on every run by construction. A lost SYN now shows up in
+        setup_us_max instead -- the first retransmit is a second out, which no
+        healthy handshake comes near.
+        """
         return bool(
             row.get("complete")
-            and row.get("syn_retries") == 0
+            and (row.get("setup_us_max") or 0) < 1_000_000
             and row.get("misrouted") == 0
             # `or 0`: an unreported field is None, and None == 0 is False.
             and (row.get("http_bad") or 0) == 0
@@ -193,7 +219,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         default=600,
         metavar="SEC",
         help="idle time between runs. Unspaced reps are not independent: "
-        "setup went 2.6 -> 1313 ms/conn over three consecutive runs",
+        "dial cost went 0.08 -> 20 ms/conn between otherwise identical reps",
     )
     ap.add_argument(
         "--interleave",
@@ -338,11 +364,11 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
             row["est_rx_pps"] = round(row["bytes"] / 1460 / row["elapsed_s"])
         if row.get("gbps") and row.get("workers_actual"):
             row["gbps_per_worker"] = round(row["gbps"] / row["workers_actual"], 4)
-        if row.get("setup_ms") and row.get("conns_total"):
-            # setup_ms sums overlapping waits; per-connection is comparable.
-            per = row["setup_ms"] / row["conns_total"]
-            row["setup_ms_per_conn"] = round(per, 2)
-            row["setup_degraded"] = per > 10 * SETUP_BASELINE_MS
+        if row.get("setup_us_p50"):
+            # p50, not the mean: one slow handshake among 128 is not the same
+            # finding as every handshake being slow, and the old sum could not
+            # tell them apart.
+            row["setup_degraded"] = row["setup_us_p50"] > 10 * SETUP_BASELINE_US
 
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         df.to_csv(out, index=False)  # a partial sweep survives interruption

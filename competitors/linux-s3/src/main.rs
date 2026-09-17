@@ -227,7 +227,14 @@ struct Outcome {
     /// Never established. Counted in `conns_total`, never in `conns_clean`,
     /// matching a smoltcp connection stuck in SynSent (§3.5).
     failed: bool,
-    setup_ms: u64,
+    /// SYN to Established. Nanoseconds, not milliseconds: a handshake on this
+    /// path is around a millisecond, which an integer-ms clock quantises to 0
+    /// or 1 and so throws most of away.
+    setup_ns: u64,
+    /// Building the rustls session, which is what the miniOSv side calls a
+    /// dial. Charged separately from the handshake there, so charge it
+    /// separately here.
+    dial_ns: u64,
     /// Nanoseconds since the process epoch, so the worker clock can span
     /// "all connects issued" -> "last of the C done" (§3.6).
     finish_ns: u64,
@@ -235,6 +242,37 @@ struct Outcome {
     /// the same instant; the max over a worker's connections is a wall clock
     /// that can be subtracted from elapsed, which setup_ms cannot.
     handshake_ns: u64,
+}
+
+/// A measured duration, summarised in microseconds. Mirrors `stats::Dist` on
+/// the miniOSv side so one parser reads both logs.
+#[derive(Default)]
+struct Dist {
+    n: u64,
+    avg: u64,
+    p50: u64,
+    p90: u64,
+    max: u64,
+}
+
+impl Dist {
+    fn of(ns: impl Iterator<Item = u64>) -> Dist {
+        let mut us: Vec<u64> = ns.map(|v| v / 1_000).collect();
+        if us.is_empty() {
+            return Dist::default();
+        }
+        us.sort_unstable();
+        // Nearest-rank, which is what the histogram on the other side
+        // approximates: the smallest sample at or above the p-th position.
+        let rank = |p: usize| us[((us.len() * p).div_ceil(100).max(1) - 1).min(us.len() - 1)];
+        Dist {
+            n: us.len() as u64,
+            avg: us.iter().sum::<u64>() / us.len() as u64,
+            p50: rank(50),
+            p90: rank(90),
+            max: *us.last().unwrap(),
+        }
+    }
 }
 
 /// Everything every connection shares. Threads borrow one of these instead of
@@ -275,8 +313,10 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
     // Constructed before the barrier, because the smoltcp side constructs its
     // sockets and `Conn`s before starting the worker clock (§3.6). None when
     // plain: no state machine to build.
+    let t_dial = Instant::now();
     let tls = (!job.plain)
         .then(|| UnbufferedClientConnection::new(job.tls.clone(), job.server_name.clone()));
+    out.dial_ns = t_dial.elapsed().as_nanos() as u64;
 
     // The worker clock starts here: after setup, before the connects are
     // issued, so it excludes construction but includes SYN, establishment and
@@ -304,7 +344,7 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
     let sock = match TcpStream::connect_timeout(&target, SYN_TIMEOUT) {
         Ok(s) => s,
         Err(e) => {
-            out.setup_ms = t_connect.elapsed().as_millis() as u64;
+            out.setup_ns = t_connect.elapsed().as_nanos() as u64;
             // Mirrors `lib.rs:998`, including the wording, so one parser reads
             // both logs.
             println!(
@@ -316,7 +356,7 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
             return out;
         }
     };
-    out.setup_ms = t_connect.elapsed().as_millis() as u64;
+    out.setup_ns = t_connect.elapsed().as_nanos() as u64;
     out.src_port = sock.local_addr().map(|a| a.port()).unwrap_or(0);
 
     let fd = sock.as_raw_fd();
@@ -653,7 +693,8 @@ fn main() {
 
     let total_b: u64 = outcomes.iter().map(|c| c.bytes_received).sum();
     let total_expected: u64 = outcomes.iter().map(|c| c.expected).sum();
-    let setup_ms: u64 = outcomes.iter().map(|c| c.setup_ms).sum();
+    let setup_us = Dist::of(outcomes.iter().map(|c| c.setup_ns));
+    let dial_us = Dist::of(outcomes.iter().map(|c| c.dial_ns));
     let conns_total = outcomes.len() as u64;
     let conns_clean = outcomes.iter().filter(|c| c.closed_cleanly).count() as u64;
     let failed = outcomes.iter().filter(|c| c.failed).count() as u64;
@@ -705,15 +746,20 @@ fn main() {
 
     println!();
     println!("connections   : {conns_clean}/{conns_total} closed cleanly, {failed} failed");
-    // Structurally zero here: the kernel picks source ports and there is no
-    // RSS model to be wrong about. Printed so the validity gate is shared (§4).
-    println!("syn retries   : 0 (expected 0)");
     println!("misrouted rx  : 0 packets dropped (expected 0)");
     println!("tx drops      : 0 no-mbuf, 0 ring-full (expected 0)");
+    // Same two lines, and the same split, as the miniOSv arm. Exact
+    // percentiles rather than the histogram it has to use: there is a `Vec`
+    // and a sort available here.
     println!(
-        "setup         : {} ms total, {:.1} ms/conn",
-        setup_ms,
-        setup_ms as f64 / conns_total.max(1) as f64
+        "SETUP STATS   : conns={} failed={failed} us_avg={} us_p50={} us_p90={} us_max={}",
+        setup_us.n, setup_us.avg, setup_us.p50, setup_us.p90, setup_us.max
+    );
+    // `loop_ms=0`: this arm is a thread per connection, so no connection waits
+    // behind another being built, and there is no dial loop to time.
+    println!(
+        "DIAL STATS    : dials={} us_avg={} us_p50={} us_p90={} us_max={} loop_ms=0.0",
+        dial_us.n, dial_us.avg, dial_us.p50, dial_us.p90, dial_us.max
     );
     println!(
         "blocks        : {}/{} of {} MiB requested ({} bytes)",
