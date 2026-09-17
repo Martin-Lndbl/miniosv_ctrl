@@ -74,6 +74,7 @@ class DuckdbTpch(Bench):
         # the same ladder competitors/duckdb-linux runs under BENCH_CPU_PROBE,
         # with no network in it at all.
         "cpuprobe": (None, str),
+        "profile": (None, str),  # boot arg -- "1" prints DuckDB's per-operator profile
         "workers": ("MININET_WORKERS", int),  # compiled in
         "conns": ("MININET_CONNS", int),  # compiled in
         "tls": ("MININET_TLS", int),  # compiled in -- 0 dials plain HTTP:80
@@ -85,6 +86,7 @@ class DuckdbTpch(Bench):
         "memlimit": "",
         "httplog": "",
         "cpuprobe": "",
+        "profile": "",
         "workers": 2,
         "conns": 8,
         "tls": 1,
@@ -110,6 +112,9 @@ class DuckdbTpch(Bench):
         # waiting at once.
         "net_ms": (r"^Q\d+: .*net_ms=([\d.]+)", float),
         "net_calls": (r"^Q\d+: .*net_calls=(\d+)", int),
+        # Wall time with at least one request outstanding; the rest is compute
+        # the stack cannot hide.
+        "net_active_ms": (r"^Q\d+: .*net_active_ms=([\d.]+)", float),
         "memory_limit": (r"^memory: limit=(\S+)", str),
         "requests_retried": (r"^BUF STATS: .*retried=(\d+)", int),
         "hw_concurrency": (r"^cpus: hw_concurrency=(\d+)", int),
@@ -301,6 +306,7 @@ class DuckdbTpch(Bench):
         thr = f" --threads {cfg['threads']}" if cfg.get("threads") else ""
         mem = f" --memlimit {cfg['memlimit']}" if cfg.get("memlimit") else ""
         hlog = " --httplog" if str(cfg.get("httplog") or "") == "1" else ""
+        prof = " --profile" if str(cfg.get("profile") or "") == "1" else ""
         # A different executable, not a flag on tpch: the ladder shares only
         # the thread count with it, and asking `tpch` to ignore --sf, the
         # query list and the bucket would make its argument parse a lie.
@@ -309,7 +315,7 @@ class DuckdbTpch(Bench):
             # it, and overriding it would make par_tall mean something else.
             args = "cpuprobe"
         else:
-            args = f"tpch --sf {cfg['sf']}{thr}{mem}{hlog} {cfg['query']}"
+            args = f"tpch --sf {cfg['sf']}{thr}{mem}{hlog}{prof} {cfg['query']}"
         r = subprocess.run(
             [sys.executable, str(MINIOSV / "scripts/setargs.py"), str(IMAGE), args],
             capture_output=True,
