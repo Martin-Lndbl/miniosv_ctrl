@@ -196,6 +196,16 @@ class Bench:
         )
 
 
+def done(df: pd.DataFrame, axis: str, value, rep: int, cfg: dict) -> bool:
+    """Whether the CSV already holds this run. Every knob counts, not just the
+    axis: two points can share an axis value and differ elsewhere."""
+    mask = (df.get("axis") == axis) & (df.get("axis_value") == value) & (df.get("rep") == rep)
+    for k, v in cfg.items():
+        if k != axis and k in df.columns:
+            mask &= df[k].fillna("").astype(str) == str(v)
+    return bool(mask.any())
+
+
 def main(bench: Bench, argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=bench.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -323,14 +333,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         on_instances = axis == INSTANCE_AXIS
         instance = value if on_instances else a.instance
         cfg = dict(base) if on_instances else {**base, axis: value}
-        if (
-            not df.empty
-            and (
-                (df.get("axis") == axis)
-                & (df.get("axis_value") == value)
-                & (df.get("rep") == rep)
-            ).any()
-        ):
+        if not df.empty and done(df, axis, value, rep, cfg):
             continue
         if cfg != built:
             print(f"\n=== building {cfg} ===", flush=True)

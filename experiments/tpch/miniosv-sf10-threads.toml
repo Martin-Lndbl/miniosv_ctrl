@@ -1,0 +1,72 @@
+name = "duckdb-tpch-sf10-miniosv-threads"
+title = "DuckDB-on-miniOSv: TPC-H latency vs DuckDB thread count, sf=10"
+description = """
+Overprovision DuckDB's thread pool past the cpu count. The instrumented runs
+show a query at sf=10 is bound by S3's ~23 ms first-byte latency times the
+request count, divided by how many requests are in flight -- and DuckDB
+issues one synchronous range read per thread, so the thread count is the
+in-flight ceiling. A thread is on a cpu 10-20% of the time, so more threads
+than cpus costs little and buys depth. `threads` is DuckDB's own setting
+(SET threads), passed as the tpch executable's --threads boot argument.
+
+32 is the cpu count and the Linux arm's default. Connection slots are held
+at 48 per worker (96 in flight) so the stack never queues a request; conns
+above the thread count changes nothing, measured at 16 vs 48 for 32 threads.
+
+Q12 because it issues the most requests (2693) of the five queries in
+miniosv-sf10-query.toml; Q01 (979) as the light end. Interleaved (rep-major)
+rather than point by point, because S3's first-byte latency drifted 22 -> 37
+ms inside twenty minutes on 2026-09-17; a sweep run one point at a time would
+be measuring the drift. The two queries are separate interleaved groups.
+
+    just reproduce miniosv-sf10-threads
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.8xlarge"
+axis     = "threads"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+interleave = true
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "query"
+
+[fixed]
+sf      = "10"
+workers = 2
+conns   = 48
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+[[points]]
+query = 12
+threads = 32
+[[points]]
+query = 12
+threads = 48
+[[points]]
+query = 12
+threads = 64
+[[points]]
+query = 12
+threads = 96
+[[points]]
+query = 1
+threads = 32
+[[points]]
+query = 1
+threads = 48
+[[points]]
+query = 1
+threads = 64
+[[points]]
+query = 1
+threads = 96
