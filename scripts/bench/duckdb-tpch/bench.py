@@ -127,6 +127,8 @@ class DuckdbTpch(Bench):
         "poll_gap_us_avg": (r"^POLL STATS: .*gap_us_avg=([\d.]+)", float),
         "poll_gap_us_max": (r"^POLL STATS: .*gap_us_max=(\d+)", int),
         "poll_gaps_over_1ms": (r"^POLL STATS: .*gaps_over_1ms=(\d+)", int),
+        "poll_busy_us_max": (r"^POLL STATS: .*busy_us_max=(\d+)", int),
+        "poll_loop_us_max": (r"^POLL STATS: .*loop_us_max=(\d+)", int),
         # SYN to Established is one round trip, so setup_us_avg is the measured
         # RTT -- the divisor in any window-limited throughput estimate.
         "conns_established": (r"^SETUP STATS: conns=(\d+)", int),

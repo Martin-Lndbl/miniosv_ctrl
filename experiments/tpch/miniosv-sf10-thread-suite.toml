@@ -1,0 +1,123 @@
+name = "duckdb-tpch-sf10-miniosv-thread-suite"
+title = "DuckDB-on-miniOSv: TPC-H latency vs DuckDB thread count, four query shapes, sf=10"
+description = """
+The wide version of miniosv-sf10-threads: DuckDB's thread pool from the cpu
+count (32) to six times it, on four queries chosen to be as unlike each
+other as the five-query set allows.
+
+  - Q01: one table, a heavy aggregate; the fewest requests (996) and the
+    most compute per byte.
+  - Q06: one table, a filter and a sum; ~2000 requests and almost no compute,
+    the closest thing to a pure network bound.
+  - Q09: a six-table join, the most tables and the most requests here (2458).
+  - Q18: a join under a GROUP BY ... HAVING over lineitem: a large hash
+    aggregate on top of the reads, memory-heavy, 1269 requests.
+
+Threads are DuckDB's own `SET threads`, via the tpch executable's --threads
+boot argument. Connection slots are 96 per worker (192 in flight) so no
+thread count here can queue on the stack. Interleaved per query, three
+reps, because S3's first-byte latency drifts by 1.5x within an hour and the
+comparison is between thread counts, not between hours.
+
+Cost: ~70 s of c6in.8xlarge per run at $1.95/h in eu-north-1 is ~$0.04,
+so 4 x 6 x 3 = 72 runs is ~$3 and about 90 minutes.
+
+    just reproduce miniosv-sf10-thread-suite
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.8xlarge"
+axis     = "threads"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+interleave = true
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "query"
+
+[fixed]
+sf      = "10"
+workers = 2
+conns   = 96
+
+[env]
+BENCH_NOTE = "miniOSv"
+
+[[points]]
+query = 1
+threads = 32
+[[points]]
+query = 1
+threads = 64
+[[points]]
+query = 1
+threads = 96
+[[points]]
+query = 1
+threads = 128
+[[points]]
+query = 1
+threads = 160
+[[points]]
+query = 1
+threads = 192
+[[points]]
+query = 6
+threads = 32
+[[points]]
+query = 6
+threads = 64
+[[points]]
+query = 6
+threads = 96
+[[points]]
+query = 6
+threads = 128
+[[points]]
+query = 6
+threads = 160
+[[points]]
+query = 6
+threads = 192
+[[points]]
+query = 9
+threads = 32
+[[points]]
+query = 9
+threads = 64
+[[points]]
+query = 9
+threads = 96
+[[points]]
+query = 9
+threads = 128
+[[points]]
+query = 9
+threads = 160
+[[points]]
+query = 9
+threads = 192
+[[points]]
+query = 18
+threads = 32
+[[points]]
+query = 18
+threads = 64
+[[points]]
+query = 18
+threads = 96
+[[points]]
+query = 18
+threads = 128
+[[points]]
+query = 18
+threads = 160
+[[points]]
+query = 18
+threads = 192
