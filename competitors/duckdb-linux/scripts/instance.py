@@ -18,7 +18,7 @@ terminates the instance once it has read them; a `shutdown -h +15` scheduled
 at the end backstops a driver that dies first. Stdlib only -- no pip on the
 instance, and no route to one.
 
-Prints the same log-line shapes app/miniduckdb/miniosv/main.cc's tpch
+Prints the same log-line shapes apps/miniduckdb/miniosv/main.cc's tpch
 executable does (Q06: ... ms, ... rows, match=...  /  TPCH SUMMARY: ...  /
 COMPLETE|INCOMPLETE: ...), so scripts/bench/duckdb-linux/bench.py's regexes
 and scripts/bench/duckdb-tpch/bench.py's land in directly comparable CSV
@@ -79,7 +79,7 @@ QUERIES = [int(x) for x in cfg("BENCH_QUERIES", "6").split(",") if x.strip()]
 HTTP_LOG = cfg("BENCH_HTTP_LOG") == "1"
 
 # "1" replaces the TPC-H-over-S3 run with the no-network CPU ladder that
-# app/miniduckdb/miniosv/main.cc's `cpuprobe` executable runs, step for step
+# apps/miniduckdb/miniosv/main.cc's `cpuprobe` executable runs, step for step
 # and query for query. The HTTP-log comparison put the sf=10 gap in the work
 # *between* reads rather than in the reads themselves, and none of that needs
 # S3 to measure -- so this arm stops touching it.

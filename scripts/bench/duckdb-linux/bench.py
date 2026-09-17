@@ -12,7 +12,7 @@ AMI boots scripts/instance.py as user-data, which fetches the real duckdb CLI
 Both knobs are runtime, so `build()` only has to make sure the binary and
 extension are actually in the bucket -- once per sweep, like linux-s3's.
 
-Prints the same log-line shapes as app/miniduckdb/miniosv/main.cc's tpch
+Prints the same log-line shapes as apps/miniduckdb/miniosv/main.cc's tpch
 executable, so this driver's `metrics` are the ones from
 scripts/bench/duckdb-tpch/bench.py verbatim -- the CSV columns line up for a
 direct comparison. Sweep machinery is ../runner.py.

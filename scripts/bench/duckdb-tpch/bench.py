@@ -35,6 +35,7 @@ import runner  # noqa: E402
 from runner import ROOT, Bench, ec2, parse  # noqa: E402
 
 MINIOSV = ROOT / "miniosv"
+APP = ROOT / "apps/bench/duckdb-tpch"
 # How a miniOSv guest reports that it is dead. Any of these means no verdict is
 # ever coming, so the instance should be terminated rather than waited out.
 CRASH = re.compile(
@@ -42,7 +43,7 @@ CRASH = re.compile(
     re.M,
 )
 IMAGE = MINIOSV / "build/release.x64/loader.img"
-# probe_steps[] in app/miniduckdb/miniosv/main.cc, and PROBE_STEPS in
+# probe_steps[] in apps/miniduckdb/miniosv/main.cc, and PROBE_STEPS in
 # competitors/duckdb-linux/scripts/instance.py. All three move together.
 PROBE_STEP_NAMES = ("dbgen", "range_scan", "hash_agg", "par_t1", "par_tall",
                     "par_t1_4x", "par_tall_4x", "q01_local", "q06_local")
@@ -299,11 +300,11 @@ class DuckdbTpch(Bench):
             "MININET_CONNS": str(cfg["conns"]),
             "MININET_TLS": str(cfg["tls"]),
         }
-        # Not `just build`: that coerces its `app` argument through
-        # absolute_path(), which breaks the `app=duckdb` shorthand app/Makefile
-        # relies on to find app/miniduckdb/miniosv/miniosv.mk.
+        # What `just build apps/bench/duckdb-tpch` runs, without the trip
+        # through just: the app is an ordinary directory, and the Makefile in
+        # it names the miniduckdb and miniduckdb-httpfs submodules.
         r = subprocess.run(
-            ["make", "-C", str(MINIOSV), "app=duckdb", f"-j{os.cpu_count()}"],
+            ["make", "-C", str(MINIOSV), f"app={APP}", f"-j{os.cpu_count()}"],
             cwd=ROOT,
             env=env,
             capture_output=True,

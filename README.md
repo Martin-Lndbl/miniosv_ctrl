@@ -10,6 +10,7 @@ that says what is measured, on which machine, against which baseline, and why.
 ```
 miniosv/       the kernel, a submodule; `just build` makes a boot image from it
 apps/          guest applications, a submodule; one directory per bench
+               (and two submodules of its own: DuckDB and its httpfs extension)
 competitors/   the Linux baselines the guest arms are subtracted from
 experiments/   one TOML per question, grouped by subject (s3, tpch, pmc)
 scripts/bench/ the sweep runner, the per-bench drivers, the plotter
@@ -21,6 +22,12 @@ and `clean`, and the shell half they share lives in `scripts/bench-setup.sh`.
 `apps/bench/smoltcp-s3` owns the bucket, the subnet and the blob; the other
 benches reuse them, so setting one of those up bootstraps through it rather
 than making a second set.
+
+`apps/bench/duckdb-tpch` is the exception to "one directory of sources per
+bench": DuckDB and the httpfs extension are whole upstream trees, so they are
+submodules at `apps/miniduckdb` and `apps/miniduckdb-httpfs` and the bench
+directory holds only the `Makefile` naming them. Nothing else needs them, so a
+checkout that will not build that bench can leave them uninitialised.
 
 ## Getting started
 
