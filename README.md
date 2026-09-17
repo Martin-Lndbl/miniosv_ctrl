@@ -19,7 +19,7 @@ before deleting, and a trailing `force` skips the prompt.
 
 ```sh
 just experiments                 # stored experiments, with titles
-just reproduce conns-plateau     # env check, build, sweep, plot
+just reproduce miniosv-tls-conns  # env check, build, sweep, plot
 just plot smoltcp-s3             # replot from an existing CSV
 ```
 

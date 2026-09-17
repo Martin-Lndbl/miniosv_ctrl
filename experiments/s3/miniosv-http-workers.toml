@@ -8,7 +8,6 @@ axis     = "workers"
 reps     = 3
 cooldown = 0
 max_vm_seconds = 240
-out      = "results/workers/miniosv/http.csv"
 
 target_ip = ""
 

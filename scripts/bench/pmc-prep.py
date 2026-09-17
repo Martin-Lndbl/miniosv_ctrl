@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reshape raw pmc-* captures into a sweep CSV that plot.py can draw.
 
-    just reproduce pmc-primitives
+    just reproduce op-primitives
 
 Each pmc-cost/pmc-perfevent/pmc-sample bench writes its own raw per-boot
 CSV, machine and system encoded in the filename rather than a column. This

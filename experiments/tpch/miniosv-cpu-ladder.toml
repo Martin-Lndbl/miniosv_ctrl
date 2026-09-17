@@ -69,7 +69,6 @@ axis     = "cpuprobe"
 reps     = 2
 cooldown = 0
 max_vm_seconds = 900
-out      = "results/cpuprobe/miniosv/ladder.csv"
 
 target_ip = ""
 

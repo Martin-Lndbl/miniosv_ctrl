@@ -31,7 +31,7 @@ deploy instance *args:
     cd "{{ miniosv }}" && "./scripts/aws-deploy.py" "$AWS_REGION" "{{ instance }}" \
         --attach --subnet "$AWS_SUBNET" {{ args }}
 
-# Reproduce a stored experiment end to end, e.g. 'just reproduce conns-plateau'
+# Reproduce a stored experiment end to end, e.g. 'just reproduce miniosv-tls-conns'
 reproduce name *args:
     #!/usr/bin/env bash
     set -euo pipefail

@@ -51,7 +51,6 @@ axis     = "query"
 reps     = 3
 cooldown = 0
 max_vm_seconds = 900
-out      = "results/query/miniosv/tpch-sf10.csv"
 
 target_ip = ""
 

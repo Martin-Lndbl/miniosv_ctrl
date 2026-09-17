@@ -9,7 +9,6 @@ actually gets), on whichever machines have a capture.
 
 axis  = "freq_hz"
 prep  = "sampling"
-out   = "results/pmc-sample/sampling.csv"
 
 series    = "series"
 value_col = "value"

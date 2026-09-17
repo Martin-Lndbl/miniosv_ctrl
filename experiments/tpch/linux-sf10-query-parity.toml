@@ -51,7 +51,6 @@ axis     = "query"
 reps     = 3
 cooldown = 0
 max_vm_seconds = 900
-out      = "results/query/linux/tpch-sf10-parity.csv"
 
 target_ip = ""
 

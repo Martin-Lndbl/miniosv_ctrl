@@ -10,7 +10,6 @@ primitive.
 
 axis  = "op"
 prep  = "primitives"
-out   = "results/pmc-cost/primitives.csv"
 
 series    = "series"
 value_col = "value"

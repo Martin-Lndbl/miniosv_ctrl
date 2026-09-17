@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Run a stored experiment end to end: build, sweep, plot.
 
-    just reproduce conns-plateau
-    just reproduce worker-scaling --dry-run
+    just reproduce miniosv-tls-conns
+    just reproduce miniosv-tls-workers --dry-run
 
 An experiment is a TOML file under experiments/ holding every parameter that
 decides what the numbers mean, plus prose saying what it measures and why.
 Reproducing one should need nothing but its name.
+
+They are grouped by subject -- experiments/s3, experiments/tpch, experiments/pmc
+-- not by the knob they sweep, which is a property of a run rather than an
+identity: grouping by axis put the four PMC experiments in three directories
+and gave three unrelated files the same name. Rows go to
+results/<subject>/<name>.csv, derived from the file's own path.
 
 Each [[points]] entry is one configuration, run as its own sweep invocation
 into a shared CSV; the resume key (axis, axis_value, rep) keeps them apart.
@@ -45,8 +51,12 @@ def qualified(path: Path) -> str:
 
 
 def find(name: str) -> Path:
-    """`workers/smoltcp-http`, a bare `smoltcp-http`, or a path. Stems repeat
-    across axes, so a bare one is an error only when it matches more than one."""
+    """`s3/miniosv-tls-workers`, a bare `miniosv-tls-workers`, or a path.
+
+    Names carry their axis now, so bare ones are unique in practice -- but the
+    ambiguity check stays: it is what would catch two subjects growing a file
+    with the same name, which is exactly how three `miniosv-tls.toml` came to
+    exist under the old layout."""
     for candidate in (Path(name), EXPERIMENTS / f"{name}.toml"):
         if candidate.is_file():
             return candidate
@@ -61,16 +71,32 @@ def find(name: str) -> Path:
     return hits[0]
 
 
+def out_path(x: dict) -> Path:
+    """Where this experiment's rows land, derived from where its file sits.
+
+    Deliberately not a TOML key. A hand-written path drifts from the layout,
+    and four of them had: `freq_hz/pmc-sampling.toml` was filling
+    `results/pmc-sample/sampling.csv`, so neither the directory nor the stem
+    matched. Derived, moving an experiment is a rename and nothing else, and
+    the file holding a run's numbers can always be found from its name.
+    """
+    path: Path = x["path"]
+    return ROOT / "results" / path.parent.name / f"{path.stem}.csv"
+
+
 def load(name: str) -> dict:
     path = find(name)
     x = tomllib.loads(path.read_text()) | {"path": path}
-    # A deploy experiment has no axis of its own.
-    group = path.parent.name
-    if path.is_relative_to(EXPERIMENTS) and "axis" in x and group != x["axis"]:
+    if "out" in x:
         raise SystemExit(
-            f"{qualified(path)} sweeps {x['axis']!r} but sits in {group}/ — "
-            f"move it to experiments/{x['axis']}/ (and its `out` with it)"
+            f"{qualified(path)} sets `out`, which is now derived from its "
+            f"path ({out_path(x).relative_to(ROOT)}). Drop the key; to write "
+            f"somewhere else, call the bench driver directly."
         )
+    # Directories group by subject, not by axis, so there is no layout
+    # invariant left to check -- only that a sweep says what it sweeps.
+    if not ({"deploy", "prep"} & x.keys()) and not ({"axis", "points"} <= x.keys()):
+        raise SystemExit(f"{qualified(path)} is a sweep but has no `axis`/`points`")
     return x
 
 
@@ -105,7 +131,8 @@ def main() -> int:
     if extra:
         raise SystemExit(f"unexpected extra arguments: {extra}")
 
-    out = ROOT / x["out"]
+    out = out_path(x)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     if prep := x.get("prep"):
         return local(x, prep, out, a.dry_run, a.no_plot)
@@ -121,7 +148,7 @@ def main() -> int:
         else x.get("point_cooldown", cooldown)
     )
 
-    # Qualified, because the stem alone no longer says which axis this is.
+    # Qualified, so the line says which subject this belongs to as well.
     print(f"experiment : {qualified(x['path'])}\n{x['description'].strip()}\n")
     print(
         f"instance   : {x['instance']}\naxis       : {axis}"

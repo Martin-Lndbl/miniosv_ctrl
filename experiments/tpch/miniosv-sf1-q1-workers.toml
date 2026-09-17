@@ -24,7 +24,6 @@ axis     = "workers"
 reps     = 2
 cooldown = 0
 max_vm_seconds = 300
-out      = "results/workers/miniosv/duckdb-sf1-q1.csv"
 
 target_ip = ""
 
