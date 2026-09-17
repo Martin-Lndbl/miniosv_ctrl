@@ -77,18 +77,15 @@ COMMON_METRICS = {
     "conns_clean": (r"^connections\s+: (\d+)/", int),
     "conns_total": (r"^connections\s+: \d+/(\d+)", int),
     "misrouted": (r"^misrouted rx\s+: (\d+)", int),
-    # SYN on the wire to Established: one round trip, per connection, so these
-    # are durations something actually waited. The old `setup_ms` measured from
-    # `connect` instead, which charged every connection for the construction of
-    # all the ones behind it in the dial loop -- a conns^2/2 sum, not a time.
+    # SYN on the wire to Established: one round trip, per connection. The old
+    # `setup_ms` measured from `connect`, giving a conns^2/2 sum, not a time.
     "setup_conns": (r"^SETUP STATS\s*: conns=(\d+)", int),
     "setup_failed": (r"^SETUP STATS\s*: .*failed=(\d+)", int),
     "setup_us_avg": (r"^SETUP STATS\s*: .*us_avg=(\d+)", int),
     "setup_us_p50": (r"^SETUP STATS\s*: .*us_p50=(\d+)", int),
     "setup_us_p90": (r"^SETUP STATS\s*: .*us_p90=(\d+)", int),
     "setup_us_max": (r"^SETUP STATS\s*: .*us_max=(\d+)", int),
-    # The CPU half: building a connection before its SYN can go out. loop_ms is
-    # the worst worker's dial loop -- wall time in which no SYN could leave.
+    # The CPU half, and the worst worker's dial loop.
     "dial_n": (r"^DIAL STATS\s*: dials=(\d+)", int),
     "dial_us_avg": (r"^DIAL STATS\s*: .*us_avg=(\d+)", int),
     "dial_us_p50": (r"^DIAL STATS\s*: .*us_p50=(\d+)", int),
@@ -186,11 +183,8 @@ class Bench:
     def valid(self, row: dict) -> bool:
         """The baseline prints misrouted as 0 so this gate is shared.
 
-        No syn_retries here: smoltcp does not expose a retransmit count, and
-        the counter that used to stand in for one was hardcoded to 1 attempt,
-        so it read 0 on every run by construction. A lost SYN now shows up in
-        setup_us_max instead -- the first retransmit is a second out, which no
-        healthy handshake comes near.
+        No syn_retries: the counter was hardcoded to 1 attempt and read 0 on
+        every run. A lost SYN shows up in setup_us_max instead.
         """
         return bool(
             row.get("complete")
@@ -365,9 +359,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         if row.get("gbps") and row.get("workers_actual"):
             row["gbps_per_worker"] = round(row["gbps"] / row["workers_actual"], 4)
         if row.get("setup_us_p50"):
-            # p50, not the mean: one slow handshake among 128 is not the same
-            # finding as every handshake being slow, and the old sum could not
-            # tell them apart.
+            # p50, not the mean: one slow handshake is not every handshake.
             row["setup_degraded"] = row["setup_us_p50"] > 10 * SETUP_BASELINE_US
 
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)

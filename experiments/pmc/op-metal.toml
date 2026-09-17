@@ -10,7 +10,6 @@ core, same kernel, same image; only the hypervisor differs.
 
 axis  = "op"
 prep  = "metal"
-out   = "results/pmc-cost/metal.csv"
 
 series    = "series"
 value_col = "value"

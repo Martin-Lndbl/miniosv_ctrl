@@ -10,7 +10,6 @@ multiplexing, which is what makes the bars comparable across machines.
 
 axis  = "machine"
 prep  = "counting"
-out   = "results/pmc-perfevent/counting.csv"
 
 series    = "series"
 value_col = "value"

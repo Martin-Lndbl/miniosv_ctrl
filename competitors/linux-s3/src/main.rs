@@ -227,13 +227,11 @@ struct Outcome {
     /// Never established. Counted in `conns_total`, never in `conns_clean`,
     /// matching a smoltcp connection stuck in SynSent (§3.5).
     failed: bool,
-    /// SYN to Established. Nanoseconds, not milliseconds: a handshake on this
-    /// path is around a millisecond, which an integer-ms clock quantises to 0
-    /// or 1 and so throws most of away.
+    /// SYN to Established, in ns: an integer-ms clock quantises a ~1 ms
+    /// handshake to 0 or 1.
     setup_ns: u64,
-    /// Building the rustls session, which is what the miniOSv side calls a
-    /// dial. Charged separately from the handshake there, so charge it
-    /// separately here.
+    /// Building the rustls session -- a dial, charged separately as on the
+    /// miniOSv side.
     dial_ns: u64,
     /// Nanoseconds since the process epoch, so the worker clock can span
     /// "all connects issued" -> "last of the C done" (§3.6).
@@ -244,8 +242,7 @@ struct Outcome {
     handshake_ns: u64,
 }
 
-/// A measured duration, summarised in microseconds. Mirrors `stats::Dist` on
-/// the miniOSv side so one parser reads both logs.
+/// Mirrors `stats::Dist` so one parser reads both logs.
 #[derive(Default)]
 struct Dist {
     n: u64,
@@ -262,8 +259,7 @@ impl Dist {
             return Dist::default();
         }
         us.sort_unstable();
-        // Nearest-rank, which is what the histogram on the other side
-        // approximates: the smallest sample at or above the p-th position.
+        // Nearest-rank, which the other side's histogram approximates.
         let rank = |p: usize| us[((us.len() * p).div_ceil(100).max(1) - 1).min(us.len() - 1)];
         Dist {
             n: us.len() as u64,
@@ -748,15 +744,12 @@ fn main() {
     println!("connections   : {conns_clean}/{conns_total} closed cleanly, {failed} failed");
     println!("misrouted rx  : 0 packets dropped (expected 0)");
     println!("tx drops      : 0 no-mbuf, 0 ring-full (expected 0)");
-    // Same two lines, and the same split, as the miniOSv arm. Exact
-    // percentiles rather than the histogram it has to use: there is a `Vec`
-    // and a sort available here.
+    // Same split as the miniOSv arm, but exact: there is a Vec and a sort here.
     println!(
         "SETUP STATS   : conns={} failed={failed} us_avg={} us_p50={} us_p90={} us_max={}",
         setup_us.n, setup_us.avg, setup_us.p50, setup_us.p90, setup_us.max
     );
-    // `loop_ms=0`: this arm is a thread per connection, so no connection waits
-    // behind another being built, and there is no dial loop to time.
+    // loop_ms=0: a thread per connection, so there is no dial loop to time.
     println!(
         "DIAL STATS    : dials={} us_avg={} us_p50={} us_p90={} us_max={} loop_ms=0.0",
         dial_us.n, dial_us.avg, dial_us.p50, dial_us.p90, dial_us.max
