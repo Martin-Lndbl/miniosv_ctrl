@@ -174,7 +174,7 @@ def checks(a, xs: list[dict]) -> None:
 
 
 def submit(a) -> int:
-    runner.apply_profile(a.profile)  # the checks, and the runner it spawns
+    runner.apply_profile(a.aws_profile)  # the checks, and the runner it spawns
     if "AWS_PROFILE" not in os.environ:
         print("WARN: no AWS profile: the runner will use whatever credentials this shell has, "
               "and an `aws login` session ends after a few hours", flush=True)

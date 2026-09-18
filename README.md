@@ -103,7 +103,7 @@ Credentials come from the profile named by `AWS_PROFILE` in `.env`
 region, the `miniosv-bench-*` buckets, and read-only cost and quota calls).
 An `aws login` session ends after a few hours that nothing can read in
 advance, and a queue that outlives it can neither launch nor terminate; the
-user's access keys do not expire. `--profile NAME` on `just reproduce`,
+user's access keys do not expire. `--aws-profile NAME` on `just reproduce`,
 `just bench`, `just queue` and `just deploy` overrides it for one run; the
 shell recipes (`just setup`, `just clean`) read `AWS_PROFILE` from the
 environment.

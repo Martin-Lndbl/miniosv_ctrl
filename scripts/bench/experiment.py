@@ -117,7 +117,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")
     a, extra = ap.parse_known_args()
-    runner.apply_profile(a.profile)
+    runner.apply_profile(a.aws_profile)
 
     x = load(a.experiment)
 

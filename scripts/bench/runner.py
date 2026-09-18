@@ -180,12 +180,12 @@ def interrupted(c, iid: str) -> bool:
 
 
 def add_profile_arg(ap: argparse.ArgumentParser) -> None:
-    """--profile on every entry point: the AWS credentials profile, selected
+    """--aws-profile on every entry point: the AWS credentials profile, selected
     through AWS_PROFILE so boto3, the aws CLI in the recipes and aws-deploy.py
     all follow it. .env sets the default; a profile with an IAM user's access
     keys outlives any `aws login` session."""
     ap.add_argument(
-        "--profile",
+        "--aws-profile",
         default=None,
         metavar="NAME",
         help="AWS credentials profile (default: $AWS_PROFILE, which .env sets)",
@@ -390,7 +390,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         )
     bench.add_arguments(ap)
     a = ap.parse_args(argv)
-    apply_profile(a.profile)
+    apply_profile(a.aws_profile)
 
     bench.max_vm_seconds = a.max_vm_seconds
     bench.market = a.market
