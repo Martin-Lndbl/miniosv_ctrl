@@ -98,6 +98,14 @@ subnet instead; `on-demand` never asks. A run EC2 reclaims mid-way is an
 invalid row. Each row records the `market` and `zone` it actually ran in.
 `just bench` and `just deploy` default to on-demand.
 
+Credentials come from the profile named by `AWS_PROFILE` in `.env`
+(`miniosv-bench`: an IAM user whose policy allows EC2 and EBS in the one
+region, the `miniosv-bench-*` buckets, and read-only cost and quota calls).
+An `aws login` session ends after a few hours that nothing can read in
+advance, and a queue that outlives it can neither launch nor terminate; the
+user's access keys do not expire. `just queue --profile` overrides it for
+one queue.
+
 ## Queueing experiments
 
 ```sh
