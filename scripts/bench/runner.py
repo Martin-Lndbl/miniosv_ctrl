@@ -24,8 +24,10 @@ INSTANCE_AXIS = "instance"
 SETUP_BASELINE_US = 1200
 
 
-def notify(msg: str, title: str, tags: str = "") -> None:
-    """Push to BENCH_PUSH_URL if set; never fails a sweep."""
+def notify(msg: str, title: str, tags: str = "", priority: str = "low") -> None:
+    """Push to BENCH_PUSH_URL if set; never fails a sweep. Routine progress
+    goes out at low priority (no sound, no wake-up); a stopped sweep, an
+    expired queue or an invalid row asks for attention."""
     url = os.environ.get("BENCH_PUSH_URL", "").strip()
     if not url:
         return
@@ -39,7 +41,7 @@ def notify(msg: str, title: str, tags: str = "") -> None:
                 method="POST",
                 headers={
                     "Title": title,
-                    "Priority": "high",
+                    "Priority": priority,
                     "Tags": tags,
                     # Python-urllib's default UA is 403'd by some endpoints.
                     "User-Agent": "miniosv-bench/1.0",
@@ -504,6 +506,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
             title=f"[{idx + 1}/{len(plan)}] {arm} {axis}={value} rep {rep} "
             f"{'OK' if row['valid'] else 'INVALID'}",
             tags="white_check_mark" if row["valid"] else "warning",
+            priority="low" if row["valid"] else "default",
         )
 
         if not row["valid"] and not a.keep_going:
@@ -513,7 +516,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
                 f"{len(plan) - idx - 1} queued runs"
             )
             print(f"\nSTOPPING: {msg}")
-            notify(msg, title=f"{arm} {out.stem} sweep STOPPED", tags="rotating_light")
+            notify(msg, title=f"{arm} {out.stem} sweep STOPPED", tags="rotating_light", priority="high")
             break
 
     ran = df[df["axis"] == axis] if "axis" in df else df

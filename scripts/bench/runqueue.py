@@ -398,7 +398,8 @@ class Runner:
         summary = ", ".join(f"{x['name']} {x['status']}" for x in xs)
         self.event(f"queue {verdict}: {summary}")
         runner.notify(summary, title=f"queue {self.state['id']} {verdict}",
-                      tags="white_check_mark" if verdict == "done" else "warning")
+                      tags="white_check_mark" if verdict == "done" else "warning",
+                      priority="default" if verdict == "done" else "high")
         return 0 if verdict == "done" else 1
 
 
