@@ -35,4 +35,4 @@ gro    = "off"
 queues = "2"
 
 [env]
-BENCH_NOTE = "Linux (GRO off, 2 queues)"
+BENCH_NOTE = "Linux"
