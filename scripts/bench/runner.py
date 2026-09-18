@@ -102,19 +102,23 @@ COMMON_METRICS = {
     # fixed at 443: http dials 80.
     "target_ip": (r"^target: ([\d.]+):\d+", str),
     "target_port": (r"^target: [\d.]+:(\d+)", int),
-    # Where the machine came from: spot when the sweep ran with --spot.
+    # The market the machine actually came from, which under
+    # spot-or-on-demand is not always the one asked for.
     "market": (r"Instance running: i-[0-9a-f]+ \([^)]*?(spot|on-demand)\)", str),
 }
 
+MARKETS = ("on-demand", "spot", "spot-or-on-demand")
 
-def launch(c, run_kwargs: dict, spot: bool = False) -> tuple[dict, str]:
-    """run_instances, on the market asked for. Spot is a one-time request at
-    the default max price (the on-demand rate), terminated if reclaimed; a
-    run is minutes and a c6in.16xlarge costs about a tenth that way. There
-    is no fallback: a run that asked for spot and got on-demand would be
-    billed at ten times what was expected, so it fails instead. Mirrored in
+
+def launch(c, run_kwargs: dict, market: str = "on-demand") -> tuple[dict, str]:
+    """run_instances, on the market asked for; returns the market used. Spot
+    is a one-time request at the default max price (the on-demand rate),
+    terminated if reclaimed; a run is minutes and a c6in.16xlarge costs
+    about a tenth that way. "spot" fails if refused: a run that asked for
+    spot and got on-demand would be billed at ten times what was expected.
+    "spot-or-on-demand" prints the refusal and retries on-demand. Mirrors
     miniosv/scripts/aws-deploy.py, which cannot import this."""
-    if not spot:
+    if market == "on-demand":
         return c.run_instances(**run_kwargs), "on-demand"
     kwargs = dict(
         run_kwargs,
@@ -130,10 +134,12 @@ def launch(c, run_kwargs: dict, spot: bool = False) -> tuple[dict, str]:
         return c.run_instances(**kwargs), "spot"
     except ClientError as e:
         err = e.response.get("Error", {})
-        raise SystemExit(
-            f"spot requested but not provided: {err.get('Code')}: "
-            f"{err.get('Message')} (drop --spot to run on-demand)"
-        ) from e
+        if market != "spot-or-on-demand":
+            raise SystemExit(
+                f"spot requested but not provided: {err.get('Code')}: {err.get('Message')}"
+            ) from e
+        print(f"    spot not provided ({err.get('Code')}); falling back to on-demand", flush=True)
+        return c.run_instances(**run_kwargs), "on-demand"
 
 
 def interrupted(c, iid: str) -> bool:
@@ -181,7 +187,7 @@ class Bench:
     instance_tag: str = ""  # EC2 Name tag, for stray cleanup
     default_instance: str = "c6in.8xlarge"
     max_vm_seconds: int = 110  # money guard: billing starts at launch
-    spot: bool = False  # ask for a spot instance; see launch()
+    market: str = "on-demand"  # one of MARKETS; see launch()
     # The final summary line's "best" figure: which column, which direction
     # counts as better, and its unit. Throughput benches want the max Gbps;
     # a latency bench like duckdb-tpch wants the min ms.
@@ -295,11 +301,12 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         "omitted, and front-ends do not perform alike",
     )
     ap.add_argument(
-        "--spot",
-        action="store_true",
-        help="launch spot instances (about a tenth of the price); the sweep "
-        "fails if one cannot be provided, and a run reclaimed mid-way is an "
-        "invalid row, not a retry",
+        "--market",
+        choices=MARKETS,
+        default="on-demand",
+        help="spot is about a tenth of the price; 'spot' fails if one cannot "
+        "be provided, 'spot-or-on-demand' falls back. A run reclaimed mid-way "
+        "is an invalid row, not a retry",
     )
     ap.add_argument("--dry-run", action="store_true")
     for knob, (_env, parser) in bench.knobs.items():
@@ -313,7 +320,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     bench.max_vm_seconds = a.max_vm_seconds
-    bench.spot = a.spot
+    bench.market = a.market
 
     axis, _, raw = a.sweep.partition("=")
     if not raw:
@@ -357,7 +364,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     print(
         f"bench    : {bench.name}"
         f"\ninstance : {'swept' if axis == INSTANCE_AXIS else a.instance}"
-        f" ({'spot' if a.spot else 'on-demand'})"
+        f" ({a.market})"
         f"\nvm cap   : {a.max_vm_seconds}s per run"
         f"\ncooldown : {a.cooldown}s between runs"
         f"\naxis     : {axis} = {values}"

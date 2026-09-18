@@ -159,7 +159,7 @@ class LinuxS3(Bench):
                     ],
                 }
             ],
-        ), self.spot)
+        ), self.market)
         iid = r["Instances"][0]["InstanceId"]
         print(f"  Instance running: {iid} ({instance}, {market})", flush=True)
 

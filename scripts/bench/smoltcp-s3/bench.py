@@ -80,7 +80,7 @@ class SmoltcpS3(Bench):
 
         with log.open("w") as fh:
             p = subprocess.Popen(
-                ["just", "deploy", instance, *(["--spot"] if self.spot else [])],
+                ["just", "deploy", instance, "--market", self.market],
                 cwd=ROOT,
                 stdout=fh,
                 stderr=subprocess.STDOUT,
@@ -133,6 +133,9 @@ class SmoltcpS3(Bench):
                   "launched one, check for it by hand", flush=True)
 
         text = log.read_text(errors="replace")
+        # Nothing was measured, so nothing is recorded: the experiment fails.
+        if m := re.search(r"^spot requested but not provided: .*", text, re.M):
+            raise SystemExit(m.group(0))
         row = parse(text, self.metrics)
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["log"] = log.name
