@@ -179,6 +179,25 @@ def interrupted(c, iid: str) -> bool:
     return inst.get("StateReason", {}).get("Code") == "Server.SpotInstanceTermination"
 
 
+def add_profile_arg(ap: argparse.ArgumentParser) -> None:
+    """--profile on every entry point: the AWS credentials profile, selected
+    through AWS_PROFILE so boto3, the aws CLI in the recipes and aws-deploy.py
+    all follow it. .env sets the default; a profile with an IAM user's access
+    keys outlives any `aws login` session."""
+    ap.add_argument(
+        "--profile",
+        default=None,
+        metavar="NAME",
+        help="AWS credentials profile (default: $AWS_PROFILE, which .env sets)",
+    )
+
+
+def apply_profile(profile: str | None) -> None:
+    """Before the first client is made, and inherited by every subprocess."""
+    if profile:
+        os.environ["AWS_PROFILE"] = profile
+
+
 def ec2():
     return boto3.client("ec2", region_name=os.environ["AWS_REGION"])
 
@@ -360,6 +379,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         "be provided, 'spot-or-on-demand' falls back. A run reclaimed mid-way "
         "is an invalid row, not a retry",
     )
+    add_profile_arg(ap)
     ap.add_argument("--dry-run", action="store_true")
     for knob, (_env, parser) in bench.knobs.items():
         ap.add_argument(
@@ -370,6 +390,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         )
     bench.add_arguments(ap)
     a = ap.parse_args(argv)
+    apply_profile(a.profile)
 
     bench.max_vm_seconds = a.max_vm_seconds
     bench.market = a.market

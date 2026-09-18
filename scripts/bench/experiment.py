@@ -113,9 +113,11 @@ def main() -> int:
         help="run just the points where KNOB has this value, e.g. query=3; "
         "how `just queue --interleave` alternates arms per point",
     )
+    runner.add_profile_arg(ap)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")
     a, extra = ap.parse_known_args()
+    runner.apply_profile(a.profile)
 
     x = load(a.experiment)
 

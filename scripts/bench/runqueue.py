@@ -174,9 +174,8 @@ def checks(a, xs: list[dict]) -> None:
 
 
 def submit(a) -> int:
-    if a.profile:
-        os.environ["AWS_PROFILE"] = a.profile  # the checks, and the runner it spawns
-    elif "AWS_PROFILE" not in os.environ:
+    runner.apply_profile(a.profile)  # the checks, and the runner it spawns
+    if "AWS_PROFILE" not in os.environ:
         print("WARN: no AWS profile: the runner will use whatever credentials this shell has, "
               "and an `aws login` session ends after a few hours", flush=True)
     xs = [experiment.load(n) for n in a.experiments]
@@ -508,9 +507,7 @@ def main() -> int:
     s.add_argument("--ttl", type=duration, default=TTL_DEFAULT, help="how long the queue may live (default 5h, max 6h)")
     s.add_argument("--retry-wait", type=duration, default=600, help="between spot attempts (default 10m)")
     s.add_argument("--market", choices=runner.MARKETS, default="spot")
-    s.add_argument("--profile", default=os.environ.get("AWS_PROFILE"),
-                   help="AWS credentials profile for the runner (default: $AWS_PROFILE, which .env sets); "
-                   "a profile with an IAM user's access keys outlives any login session")
+    runner.add_profile_arg(s)
     s.add_argument("--dry-run", action="store_true", help="the checks and the plan, no runner")
     s.set_defaults(fn=submit)
     r = sub.add_parser("run", help=argparse.SUPPRESS)
