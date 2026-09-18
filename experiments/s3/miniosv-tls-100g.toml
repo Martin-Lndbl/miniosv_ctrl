@@ -1,0 +1,27 @@
+name = "miniosv-tls-100g"
+title = "TLS GET throughput on a 100 Gbps machine vs connections per worker"
+description = "Does the stack fill a 100 Gbps NIC through rustls, and how many connections does that take?"
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.16xlarge"   # 100 Gbps, not burstable; 64 vCPUs
+axis     = "conns"
+grid     = { conns = [16, 24, 32] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 300        # 16 x 32 x 128 MiB = 64 GiB: ~6 s at line rate, ~20 s at 30 Gbps
+
+# Blank resolves once for the whole experiment; S3 front-ends do not perform
+# alike, so pin one to repeat against it.
+target_ip = ""
+
+[fixed]
+# ENA grants 16 RSS queues on c6in.16xlarge (measured 2026-09-18: asking for
+# 32 clamped to 16), so 16 workers is the whole machine as far as the NIC is
+# concerned; the other 48 vCPUs idle. TX descriptors clamp to 1024 too.
+workers = 16
+block   = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "miniOSv"
