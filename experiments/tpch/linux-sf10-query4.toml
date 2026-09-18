@@ -1,0 +1,39 @@
+name = "linux-sf10-query4"
+title = "DuckDB on stock Linux: TPC-H latency on the four suite queries, sf=10"
+description = """
+The stock arm of the four-query comparison: the NIC as AL2023 sets it up
+(GRO on, one queue per vCPU), same queries and thread counts as
+linux-sf10-query4-parity. Run 2026-09-18: equal to or slower than the parity
+arm in 14 of 16 cells (median 3% slower), so the overlay leaves it out; the
+parity arm is the Linux number. To see it anyway:
+
+    just plot results/tpch/miniosv-sf10-query4.csv results/tpch/linux-sf10-query4-parity.csv \\
+              results/tpch/linux-sf10-query4.csv \\
+        --series note --x threads --facet query --value-col query_ms --ylabel "Query latency (ms)"
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "c6in.8xlarge"
+axis     = "query"
+grid     = { threads = [32, 64, 96, 128], query = [1, 6, 9, 18] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf     = "10"
+pin    = ""
+gro    = ""
+queues = ""
+
+[env]
+BENCH_NOTE = "Linux (stock)"
