@@ -14,7 +14,7 @@ time (two instances, one per stack), so S3's drift lands on both alike.
 bench    = "competitors/duckdb-linux"
 instance = "c6in.8xlarge"
 axis     = "query"
-grid     = { threads = [32, 64], query = [1, 6, 9, 18] }
+grid     = { threads = [32, 64, 96, 128], query = [1, 6, 9, 18] }
 reps     = 3
 cooldown = 0
 max_vm_seconds = 900
