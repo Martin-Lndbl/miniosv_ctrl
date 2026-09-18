@@ -35,8 +35,12 @@ class SmoltcpS3(Bench):
         "workers": ("BENCH_WORKERS", size),
         "conns": ("BENCH_CONNS_PER_WORKER", size),
         "block": ("BENCH_BLOCK_SIZE", size),
+        # 0 is the stack's default ring; 0 blocks is one per connection.
+        "rxdesc": ("BENCH_RX_DESC", size),
+        "blocks": ("BENCH_BLOCKS_PER_WORKER", size),
+        "redial": ("BENCH_SYN_REDIAL_MS", size),
     }
-    defaults = {"workers": 8, "conns": 24, "block": 128 << 20}
+    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "rxdesc": 0, "blocks": 0, "redial": 0}
     instance_tag = "miniosv-loader-*"
     default_instance = "c6in.8xlarge"  # 50 Gbps sustained; c7i.8xlarge caps at 12.5
     max_vm_seconds = 110
@@ -46,6 +50,15 @@ class SmoltcpS3(Bench):
         "workers_actual": (r"^rss: (\d+) queues", int),
         "http_bad": (r"^http status\s+: (\d+) non-206", int),
         "instance_id": (r"Instance running: (i-[0-9a-f]+)", str),
+        "zone": (r"Instance running: i-[0-9a-f]+ \(\S+, ([a-z]+-[a-z]+-\d[a-z]), (?:spot|on-demand)\)", str),
+        "tail_ms_max": (r"^TAIL STATS\s*: idle_max_ms=([\d.]+)", float),
+        "tail_ms_avg": (r"^TAIL STATS\s*: .*idle_avg_ms=([\d.]+)", float),
+        "syn_redials": (r"^syn redials\s*: (\d+)", int),
+        "gbps_steady": (r"^STEADY: ([\d.]+) Gbps", float),
+        "gbps_wire": (r"^WIRE: ([\d.]+) Gbps", float),
+        "gbps_wire_steady": (r"^WIRE STEADY: ([\d.]+) Gbps", float),
+        "gbps_wire_peak": (r"^WIRE PEAK: ([\d.]+) Gbps", float),
+        "imissed": (r"^nic rx\s+: \d+ pkts, (\d+) imissed", int),
     }
 
     def build(self, cfg: dict, ip: str) -> None:

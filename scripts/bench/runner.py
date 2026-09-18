@@ -358,7 +358,8 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
 
     def gib(v):
         c = {**base, axis: v}
-        n = c.get("workers", 1) * c.get("conns", 1) * c.get("block", 0)
+        per_worker = c.get("blocks") or c.get("conns", 1)
+        n = c.get("workers", 1) * per_worker * c.get("block", 0)
         return n / (1 << 30)
 
     print(

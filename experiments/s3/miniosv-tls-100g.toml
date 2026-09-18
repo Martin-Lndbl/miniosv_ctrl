@@ -8,7 +8,7 @@ axis     = "conns"
 grid     = { conns = [16, 24, 32] }
 reps     = 3
 cooldown = 0
-max_vm_seconds = 300        # 16 x 32 x 128 MiB = 64 GiB: ~6 s at line rate, ~20 s at 30 Gbps
+max_vm_seconds = 300        # 16 x 96 x 128 MiB = 192 GiB: ~17 s at line rate, ~60 s at 30 Gbps
 
 # Blank resolves once for the whole experiment; S3 front-ends do not perform
 # alike, so pin one to repeat against it.
@@ -17,9 +17,16 @@ target_ip = ""
 [fixed]
 # ENA grants 16 RSS queues on c6in.16xlarge (measured 2026-09-18: asking for
 # 32 clamped to 16), so 16 workers is the whole machine as far as the NIC is
-# concerned; the other 48 vCPUs idle. TX descriptors clamp to 1024 too.
+# concerned; the other 48 vCPUs idle. TX descriptors clamp to 512 under LLQ.
 workers = 16
 block   = "128M"
+# From miniosv-tls-100g-tuning: slots refill from 96 blocks each so one slow
+# connection holds up a block rather than the run (+2%), and a SYN unanswered
+# for 100 ms is dialled again on a fresh port (7% of SYNs; setup 40 -> 3 ms,
+# no more one-second stalls). 8192 RX descriptors were 2% slower and are not
+# used. The one-block-per-connection rows live in miniosv-tls-100g-oneblock.csv.
+blocks  = 96
+redial  = 100
 
 [env]
 BENCH_TLS_STUB  = "0"

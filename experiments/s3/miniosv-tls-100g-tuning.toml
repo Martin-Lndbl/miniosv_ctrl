@@ -1,0 +1,56 @@
+name = "miniosv-tls-100g-tuning"
+title = "TLS GET throughput on c6in.16xlarge: RX ring, slot refill, SYN re-dial"
+description = "Which of the three suspects for the last 15 Gbps pays: 8192 RX descriptors, slots refilling from a block queue instead of one block each, and re-dialling a SYN unanswered for 100 ms. One change at a time on top of the previous winner."
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.16xlarge"
+axis     = "rxdesc"
+reps     = 2
+cooldown = 0
+interleave = true
+keep_going = true       # a retransmitted SYN invalidates a row; the next rep still runs
+max_vm_seconds = 300
+
+# Pinned for the whole comparison: front-ends differ, and this one carried
+# the 85 Gbps point. If it has rotated away the build fails at the SYN.
+target_ip = "3.5.217.247"
+
+[fixed]
+workers = 16
+conns   = 24
+block   = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "rx {rxdesc}, blocks {blocks}, redial {redial} ms"
+
+# A: as measured at 85 Gbps. B: twice the RX ring.
+[[points]]
+rxdesc = 4096
+blocks = 0
+redial = 0
+[[points]]
+rxdesc = 8192
+blocks = 0
+redial = 0
+
+# Verdict A/B (2 reps, front-end 3.5.217.247): 83.8/83.9 Gbps at 4096
+# descriptors, 81.5/82.1 at 8192. The larger ring did not pay; 4096 stays.
+# C: slots refill from four blocks each instead of one, so a slow connection
+# holds up one block, not the run.
+[[points]]
+rxdesc = 4096
+blocks = 96
+redial = 0
+
+# Verdict C (one rep, a SYN retransmitted twice inside it): 85.9 Gbps over
+# 192 GiB in 19.2 s, tails 2.1 s on average -- so about 96 Gbps of payload
+# while every slot was busy, the wire's limit for 1460-byte segments. The
+# aggregate gains 2.5%; the steady rate is what the stack sustains.
+# D: a SYN unanswered for 100 ms is dialled again on a fresh port, instead of
+# smoltcp's one-second wait, on top of refill.
+[[points]]
+rxdesc = 4096
+blocks = 96
+redial = 100
