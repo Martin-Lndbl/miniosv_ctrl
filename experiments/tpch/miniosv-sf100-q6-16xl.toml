@@ -1,0 +1,37 @@
+name = "miniosv-sf100-q6-16xl"
+title = "DuckDB-on-miniOSv: TPC-H Q06 at sf=100 on c6in.16xlarge"
+description = """
+One query at sf=100 on the 64-vCPU instance (100 Gbps, 128 GiB), both
+stacks at 128 DuckDB threads -- twice the cpu count, the setting that was
+best at sf=10 on the 8xlarge. Q06 because it is the purest network-bound
+query: a single-table scan and sum, ~20k range reads, no join and no memory
+risk, so what differs between the arms is the stack.
+
+    just plot results/tpch/miniosv-sf100-q6-16xl.csv results/tpch/linux-sf100-q6-16xl-parity.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+"""
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.16xlarge"
+axis     = "query"
+grid     = { query = [6] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 64
+threads = 128
+
+[env]
+BENCH_NOTE = "miniOSv"
