@@ -193,7 +193,10 @@ def submit(a) -> int:
         "retry_wait_s": a.retry_wait,
         "experiments": [
             {"name": experiment.qualified(x["path"]), "path": str(x["path"]), "status": "queued",
-             "reps": a.reps or x["reps"], "attempts": 0, "spot_refusals": 0, "last": None}
+             "reps": a.reps or x["reps"], "attempts": 0, "spot_refusals": 0, "last": None,
+             # The axis and its values, so an interleaved queue can run the
+             # arms one point at a time: Q01 on both, then Q02 on both.
+             "axis": x["axis"], "values": [str(p[x["axis"]]) for p in x["points"]]}
             for x in xs
         ],
         "log": str(qdir / "runner.log"),
@@ -245,11 +248,13 @@ class Runner:
     def deadline(self) -> float:
         return self.state["deadline"]
 
-    def run_one(self, x: dict, reps: int, plot: bool) -> str:
-        """Run one experiment to `reps`, retrying while spot is refused.
-        Returns done | failed | expired | stopped."""
+    def run_one(self, x: dict, reps: int, plot: bool, only: str | None = None) -> str:
+        """Run one experiment to `reps`, or just the point `only` (axis=value),
+        retrying while spot is refused. Returns done | failed | expired | stopped."""
         cmd = [sys.executable, str(ROOT / "scripts/bench/experiment.py"), x["path"],
                "--reps", str(reps), "--market", self.state["market"]]
+        if only:
+            cmd += ["--only", only]
         if not plot:
             cmd.append("--no-plot")
         log = self.qdir / (Path(x["path"]).stem + ".log")
@@ -357,18 +362,26 @@ class Runner:
         xs = self.state["experiments"]
         verdict = "done"
         if self.state["interleave"]:
+            # Rep-major, and within a rep point-major across the arms: the
+            # i-th point of every experiment before the (i+1)-th of any, so a
+            # comparison exists after the first point and drift lands on both.
             most = max(x["reps"] for x in xs)
+            longest = max(len(x["values"]) for x in xs)
             for k in range(1, most + 1):
-                for x in xs:
-                    if x["status"] == "failed" or k > x["reps"]:
-                        continue
-                    self.event(f"{x['name']} rep {k}")
-                    v = self.run_one(x, k, plot=False)
-                    if v in ("expired", "stopped"):
-                        verdict = v
+                for i in range(longest):
+                    for x in xs:
+                        if x["status"] == "failed" or k > x["reps"] or i >= len(x["values"]):
+                            continue
+                        only = f"{x['axis']}={x['values'][i]}"
+                        self.event(f"{x['name']} {only} rep {k}")
+                        v = self.run_one(x, k, plot=False, only=only)
+                        if v in ("expired", "stopped"):
+                            verdict = v
+                            break
+                        if v == "failed":
+                            self.event(f"{x['name']} FAILED at {only}; see its log")
+                    if verdict != "done":
                         break
-                    if v == "failed":
-                        self.event(f"{x['name']} FAILED; see its log")
                 if verdict != "done":
                     break
             if verdict == "done":

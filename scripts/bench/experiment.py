@@ -106,6 +106,13 @@ def main() -> int:
         help="where the machines come from; the default is spot in any zone "
         "of the VPC, and the experiment fails if no zone has one",
     )
+    ap.add_argument(
+        "--only",
+        default=None,
+        metavar="KNOB=VALUE",
+        help="run just the points where KNOB has this value, e.g. query=3; "
+        "how `just queue --interleave` alternates arms per point",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")
     a, extra = ap.parse_known_args()
@@ -124,6 +131,11 @@ def main() -> int:
         return local(x, prep, out, a.dry_run, a.no_plot)
 
     axis, points = x["axis"], x["points"]
+    if a.only:
+        knob, _, value = a.only.partition("=")
+        points = [p for p in points if str(p.get(knob, x.get("fixed", {}).get(knob))) == value]
+        if not points:
+            raise SystemExit(f"--only {a.only} matches no point of {qualified(x['path'])}")
     reps = a.reps if a.reps is not None else x["reps"]
     driver = ROOT / "scripts/bench" / Path(x["bench"]).name / "bench.py"
     cooldown = a.cooldown if a.cooldown is not None else x.get("cooldown", 600)
