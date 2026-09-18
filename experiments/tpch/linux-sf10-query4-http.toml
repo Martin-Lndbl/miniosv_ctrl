@@ -1,24 +1,20 @@
-name = "miniosv-sf10-query4"
-title = "DuckDB-on-miniOSv: TPC-H latency on the four suite queries, sf=10"
+name = "linux-sf10-query4-http"
+title = "DuckDB on Linux at receive parity: TPC-H latency on the four suite queries, sf=10, plain HTTP"
 description = """
+The same comparison over plain HTTP (S3 on port 80): the stacks without
+rustls and OpenSSL in the path.
+
 One stack's half of the comparison on the queries miniosv-sf10-thread-suite
 chose (Q01, Q06, Q09, Q18), at DuckDB's default thread count (32, the cpu
 count) and at 64, the suite's optimum on miniOSv. `threads` is DuckDB's own
 setting, so both stacks get the same knob. Run the two halves at the same
 time (two instances, one per stack), so S3's drift lands on both alike.
 
-    just plot results/tpch/miniosv-sf10-query4.csv results/tpch/linux-sf10-query4-parity.csv \\
+    just plot results/tpch/miniosv-sf10-query4-http.csv results/tpch/linux-sf10-query4-http.csv \\
         --series note --x threads --facet query --value-col query_ms --ylabel "Query latency (ms)"
-
-Where the wall time goes (S3 first byte, wire, guest, DuckDB alone), from
-this arm's request stats, with Linux DuckDB's own per-request p50 as the
-reference:
-
-    just breakdown results/tpch/miniosv-sf10-query4.csv --threads 64 \\
-        --linux results/query/linux/tpch-sf10-t48.csv
 """
 
-bench    = "apps/bench/duckdb-tpch"
+bench    = "competitors/duckdb-linux"
 instance = "c6in.8xlarge"
 axis     = "query"
 grid     = { threads = [32, 64, 96, 128], query = [1, 6, 9, 18] }
@@ -36,9 +32,11 @@ series    = "note"
 box       = true
 
 [fixed]
-sf      = "10"
-workers = 2
-conns   = 64
+sf     = "10"
+pin    = ""
+gro    = "off"
+queues = "2"
+scheme = "http"
 
 [env]
-BENCH_NOTE = "miniOSv"
+BENCH_NOTE = "Linux"

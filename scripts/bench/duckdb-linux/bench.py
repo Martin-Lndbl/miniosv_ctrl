@@ -85,9 +85,10 @@ class DuckdbLinux(Bench):
         # Here because apps/bench/duckdb-tpch has had it all along, and a
         # tuning knob on one arm only is not a comparison.
         "threads": (None, int),
+        "scheme": (None, str),  # "http" dials S3 on port 80; apps/bench/duckdb-tpch's tls=0
     }
     defaults = {"query": 6, "sf": "1", "pin": "", "gro": "", "queues": "",
-                "httplog": "", "cpuprobe": "", "threads": 0}
+                "httplog": "", "cpuprobe": "", "threads": 0, "scheme": "https"}
     instance_tag = "duckdb-linux-bench"
     default_instance = "c7i.large"  # matches apps/bench/duckdb-tpch's default
     max_vm_seconds = 300
@@ -95,7 +96,8 @@ class DuckdbLinux(Bench):
     headline_agg = "min"
     headline_unit = "ms"
 
-    metrics = {"pinned_ip": (r"^pinned \S+ -> ([\d.]+)", str),
+    metrics = {"scheme": (r"^tpch-linux: sf=[\d.]+, \d+ quer\w+, bucket \S+ \((\w+)\)", str),
+               "pinned_ip": (r"^pinned \S+ -> ([\d.]+)", str),
                # Read back off the NIC, not echoed from the request, so these
                # say what the run actually had rather than what it asked for.
                "nic_iface": (r"^nic: iface=(\S+)", str),
@@ -189,6 +191,7 @@ class DuckdbLinux(Bench):
             "BENCH_HTTP_LOG": str(cfg.get("httplog") or ""),
             "BENCH_CPU_PROBE": str(cfg.get("cpuprobe") or ""),
             "BENCH_THREADS": str(cfg.get("threads") or ""),
+            "BENCH_SCHEME": str(cfg.get("scheme") or ""),
         }
         body = (SCRIPTS / "instance.py").read_text()
         body = body.split("\n", 1)[1] if body.startswith("#!") else body

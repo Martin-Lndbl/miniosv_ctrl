@@ -56,7 +56,8 @@ LOCAL = cfg("BENCH_LOCAL", "0") == "1"
 WORK = cfg("BENCH_WORK", "/run")
 BUCKET, REGION = cfg("AWS_BUCKET"), cfg("AWS_REGION")
 HOST = "{}.s3.{}.amazonaws.com".format(BUCKET, REGION)
-ENDPOINT = "https://{}".format(HOST)
+SCHEME = cfg("BENCH_SCHEME", "https") or "https"
+ENDPOINT = "{}://{}".format(SCHEME, HOST)
 
 # Pin the bucket to one S3 front-end, the way a mininet image is built: it
 # compiles in a single address and every connection dials it. DuckDB here
@@ -448,8 +449,8 @@ def main():
         # fails on the empty string rather than treating it as absent.
         if not os.environ.get("HOME"):
             os.environ["HOME"] = WORK
-        say("tpch-linux: sf={}, {} quer{}, bucket {}".format(
-            SF, len(QUERIES), "y" if len(QUERIES) == 1 else "ies", BUCKET))
+        say("tpch-linux: sf={}, {} quer{}, bucket {} ({})".format(
+            SF, len(QUERIES), "y" if len(QUERIES) == 1 else "ies", BUCKET, SCHEME))
         tune_nic()
 
         if not fetch(ENDPOINT + "/bin/duckdb-linux/duckdb", BIN):

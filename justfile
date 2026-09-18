@@ -51,6 +51,13 @@ plot csv *args:
     nix develop "{{ justfile_directory() }}#rust" --command python3 \
         "{{ justfile_directory() }}/scripts/bench/plot.py" "$@"
 
+# Where a query's wall time goes, e.g. 'just breakdown results/tpch/miniosv-sf10-query4.csv --threads 64'
+breakdown csv *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix develop "{{ justfile_directory() }}#rust" --command python3 \
+        "{{ justfile_directory() }}/scripts/bench/breakdown.py" "$@"
+
 # Run a bench's sweep, e.g. 'just bench apps/bench/smoltcp-s3 --sweep conns=1,2,4,8'
 bench app *args:
     #!/usr/bin/env bash
