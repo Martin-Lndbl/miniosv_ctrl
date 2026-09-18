@@ -496,9 +496,12 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         df.to_csv(out, index=False)  # a partial sweep survives interruption
         summary = bench.summary(row)
         print(f"  {summary}, valid={row['valid']}")
+        # Which arm this is: the note the experiment compiled in (miniOSv,
+        # Linux (GRO off, 4 queues)), else the stack, and the CSV's name.
+        arm = os.environ.get("BENCH_NOTE") or bench.os_name
         notify(
-            summary,
-            title=f"[{idx + 1}/{len(plan)}] {axis}={value} rep {rep} "
+            f"{arm}, {out.stem}: {summary}",
+            title=f"[{idx + 1}/{len(plan)}] {arm} {axis}={value} rep {rep} "
             f"{'OK' if row['valid'] else 'INVALID'}",
             tags="white_check_mark" if row["valid"] else "warning",
         )
@@ -510,7 +513,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
                 f"{len(plan) - idx - 1} queued runs"
             )
             print(f"\nSTOPPING: {msg}")
-            notify(msg, title=f"{bench.name} sweep STOPPED", tags="rotating_light")
+            notify(msg, title=f"{arm} {out.stem} sweep STOPPED", tags="rotating_light")
             break
 
     ran = df[df["axis"] == axis] if "axis" in df else df
