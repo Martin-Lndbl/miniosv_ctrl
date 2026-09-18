@@ -4,9 +4,7 @@
     scripts/bench/breakdown.py results/tpch/miniosv-sf10-breakdown.csv \\
         --linux results/tpch/linux-sf10-breakdown.csv
 
-Each bar is the arm's fastest run of the query (the 64-thread regime is
-bimodal; a run with its in-flight depth collapsed says little about
-composition). Wall time splits into the span with at least one S3 request
+Each bar is the arm's median run of the query, by wall time. Wall time splits into the span with at least one S3 request
 outstanding and DuckDB running with none. The outstanding span is apportioned by a request's
 average life. On miniOSv the arm measures that life itself: S3's first-byte
 latency, the bytes on the wire, and what remains (queueing, wake-up, parsing)
@@ -28,9 +26,13 @@ PARTS = [("S3 first byte", "#c0504d"), ("wire transfer", "#e8a33d"),
          ("stack + client", "#2e7d32"), ("DuckDB, no request outstanding", "#4472c4")]
 
 
+def median_run(g: pd.DataFrame, wall: str) -> pd.Series:
+    return g.sort_values(wall).iloc[(len(g) - 1) // 2]
+
+
 def miniosv(g: pd.DataFrame) -> tuple[list[float], float, float, float]:
     """Wall-time parts, plus the request's S3 first-byte, wire and total ms."""
-    m = g.loc[g["query_ms"].idxmin()]
+    m = median_run(g, "query_ms")
     per_call = m["net_ms"] / m["net_calls"]
     s3, wire = m["ttfb_us_avg"] / 1000, m["xfer_us_avg"] / 1000
     stack = max(0.0, per_call - s3 - wire)
@@ -41,7 +43,7 @@ def miniosv(g: pd.DataFrame) -> tuple[list[float], float, float, float]:
 
 
 def linux(g: pd.DataFrame, s3: float, wire: float) -> list[float]:
-    m = g.loc[g["http_profile_ms"].idxmin()]
+    m = median_run(g, "http_profile_ms")
     per_req = m["http_ms_sum"] / m["http_n"]
     floor = min(per_req, s3 + wire)
     window = m["http_window_ms"]
@@ -76,7 +78,7 @@ def main() -> int:
         if len(lq):
             bars.append((i * 3 + 1, f"Q{q:02d}\nLinux", linux(lq, s3, wire)))
         print(f"Q{q:02d}: a request lives {per_call:.1f} ms on miniOSv (S3 first byte {s3:.1f}, wire {wire:.1f})"
-              + (f", {(lq['http_ms_sum'] / lq['http_n']).min():.1f} ms on Linux" if len(lq) else ""))
+              + (f", {(lq['http_ms_sum'] / lq['http_n']).median():.1f} ms on Linux" if len(lq) else ""))
 
     fig, ax = plt.subplots(figsize=(1.1 * len(bars) + 3, 4.8))
     xs = [b[0] for b in bars]
@@ -89,7 +91,7 @@ def main() -> int:
         ax.text(x, top, f"{100 * parts[2] / sum(parts):.1f}%", ha="center", va="bottom", fontsize=8)
     ax.set_xticks(xs, [b[1] for b in bars], fontsize=8)
     ax.set_ylabel("Query wall time (ms)")
-    ax.set_title(a.title or f"{a.csv.stem}: where the wall time goes (best run)", fontsize=10)
+    ax.set_title(a.title or f"{a.csv.stem}: where the wall time goes (median run)", fontsize=10)
     ax.grid(axis="y", alpha=0.3)
     fig.legend(fontsize=8, loc="lower center", ncol=4, frameon=False)
     fig.tight_layout(rect=(0, 0.06, 1, 1))

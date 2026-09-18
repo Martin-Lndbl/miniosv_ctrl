@@ -14,7 +14,7 @@ bench    = "apps/bench/duckdb-tpch"
 instance = "c6in.8xlarge"
 axis     = "query"
 grid     = { query = [1, 6, 9, 18] }
-reps     = 2
+reps     = 3
 cooldown = 0
 max_vm_seconds = 900
 keep_going = true
