@@ -39,7 +39,7 @@ APP = ROOT / "apps/bench/duckdb-tpch"
 # How a miniOSv guest reports that it is dead. Any of these means no verdict is
 # ever coming, so the instance should be terminated rather than waited out.
 CRASH = re.compile(
-    r"^(?:page fault outside application.*|Assertion failed:.*|Aborted|\[backtrace\])$",
+    r"^(?:page fault outside application.*|Assertion failed:.*|Aborted|\[backtrace\]|sched: n==p.*)$",
     re.M,
 )
 IMAGE = MINIOSV / "build/release.x64/loader.img"
