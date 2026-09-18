@@ -339,13 +339,14 @@ class DuckdbTpch(Bench):
 
         with log.open("w") as fh:
             p = subprocess.Popen(
-                ["just", "deploy", instance],
+                ["just", "deploy", instance, *(["--spot"] if self.spot else [])],
                 cwd=ROOT,
                 stdout=fh,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
             iid = None
+            reclaimed = False
             for _ in range(1500):  # wait for the instance to exist
                 if m := re.search(
                     r"Instance running: (i-[0-9a-f]+)", log.read_text(errors="replace")
@@ -376,6 +377,7 @@ class DuckdbTpch(Bench):
                     if p.poll() is not None:
                         break
                     time.sleep(1)
+                reclaimed = runner.interrupted(ec2(), iid)
                 ec2().terminate_instances(InstanceIds=[iid])
             # SIGINT runs aws-deploy.py's teardown. To the GROUP, not p: p is
             # `just`, which does not forward it.
@@ -407,6 +409,7 @@ class DuckdbTpch(Bench):
         # image is broken.
         row["crashed"] = crashed or bool(CRASH.search(text))
         row["log"] = log.name
+        row["interrupted"] = reclaimed
         return row
 
     def valid(self, row: dict) -> bool:

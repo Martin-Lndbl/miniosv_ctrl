@@ -99,6 +99,11 @@ def main() -> int:
         help="idle time between points; defaults to --cooldown",
     )
     ap.add_argument("--reps", type=int, default=None, help="overrides the experiment's value")
+    ap.add_argument(
+        "--on-demand",
+        action="store_true",
+        help="launch on-demand; experiments run on spot unless told otherwise",
+    )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")
     a, extra = ap.parse_known_args()
@@ -128,7 +133,8 @@ def main() -> int:
 
     print(f"experiment : {qualified(x['path'])}\n{x['description'].strip()}\n")
     print(
-        f"instance   : {x['instance']}\naxis       : {axis}"
+        f"instance   : {x['instance']} ({'on-demand' if a.on_demand else 'spot'})"
+        f"\naxis       : {axis}"
         f"\npoints     : {len(points)} x {reps} reps"
         f"\nvm cap     : {x.get('max_vm_seconds', 110)}s per run"
         f"\ncooldown   : {cooldown}s between reps, {point_cooldown}s between "
@@ -187,6 +193,10 @@ def main() -> int:
             cmd.append("--keep-going")
         if x.get("interleave"):
             cmd.append("--interleave")
+        # Spot unless --on-demand: about a tenth of the price, and a sweep
+        # that cannot get one fails rather than paying the difference quietly.
+        if not a.on_demand:
+            cmd.append("--spot")
         if a.dry_run:
             cmd.append("--dry-run")
 

@@ -58,7 +58,7 @@ class SmoltcpS3(Bench):
             **{self.knobs[k][0]: str(v) for k, v in cfg.items()},
         }
         r = subprocess.run(
-            ["just", "build", BENCH, "-j16"],
+            ["just", "build", BENCH, f"-j{os.cpu_count()}"],
             cwd=ROOT,
             env=env,
             capture_output=True,
@@ -80,13 +80,14 @@ class SmoltcpS3(Bench):
 
         with log.open("w") as fh:
             p = subprocess.Popen(
-                ["just", "deploy", instance],
+                ["just", "deploy", instance, *(["--spot"] if self.spot else [])],
                 cwd=ROOT,
                 stdout=fh,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
             iid = None
+            reclaimed = False
             for _ in range(1500):  # wait for the instance to exist
                 if m := re.search(
                     r"Instance running: (i-[0-9a-f]+)", log.read_text(errors="replace")
@@ -107,6 +108,7 @@ class SmoltcpS3(Bench):
                     if p.poll() is not None:
                         break
                     time.sleep(1)
+                reclaimed = runner.interrupted(ec2(), iid)
                 ec2().terminate_instances(InstanceIds=[iid])
             # SIGINT runs aws-deploy.py's teardown. To the GROUP, not p: p is
             # `just`, which does not forward it. The 75s is a ceiling; hitting
@@ -134,6 +136,7 @@ class SmoltcpS3(Bench):
         row = parse(text, self.metrics)
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["log"] = log.name
+        row["interrupted"] = reclaimed
         return row
 
 

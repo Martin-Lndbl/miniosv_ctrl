@@ -220,7 +220,7 @@ class DuckdbLinux(Bench):
             )
 
         c = ec2()
-        r = c.run_instances(
+        r, market = runner.launch(c, dict(
             ImageId=self.ami,
             InstanceType=instance,
             MinCount=1,
@@ -237,9 +237,9 @@ class DuckdbLinux(Bench):
                     ],
                 }
             ],
-        )
+        ), self.spot)
         iid = r["Instances"][0]["InstanceId"]
-        print(f"  Instance running: {iid}", flush=True)
+        print(f"  Instance running: {iid} ({instance}, {market})", flush=True)
 
         text = ""
         try:
@@ -258,6 +258,7 @@ class DuckdbLinux(Bench):
                 if re.search(r"^(COMPLETE|INCOMPLETE):", text, re.M):
                     break
         finally:
+            reclaimed = runner.interrupted(c, iid)
             c.terminate_instances(InstanceIds=[iid])
 
         log.write_text(text)
@@ -265,6 +266,7 @@ class DuckdbLinux(Bench):
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["instance_id"] = iid
         row["log"] = log.name
+        row["interrupted"] = reclaimed
 
         # The serial console is not line-atomic: a kernel message can land on
         # top of the "Qnn: ... ms" line and take the run's only number with it,

@@ -89,6 +89,13 @@ Useful flags: `--dry-run` prints the plan without launching anything,
 `--no-plot` stops after the data, and `--reps`, `--cooldown` and
 `--point-cooldown` override the file for one run.
 
+Experiments run on spot instances, about a tenth of the on-demand price (a
+c6in.16xlarge was $0.39 against $3.90 an hour in eu-north-1 on 2026-09-18);
+`--on-demand` opts out. Spot is never a silent fallback in either direction:
+a sweep that asks for spot and cannot get one fails, and a run EC2 reclaims
+mid-way is an invalid row. The CSV's `market` column says which kind each row
+ran on. `just bench` and `just deploy` are on-demand unless given `--spot`.
+
 ## Results and plots
 
 Rows land in `results/<subject>/<name>.csv`, derived from the experiment file's

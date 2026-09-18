@@ -141,7 +141,7 @@ class LinuxS3(Bench):
                   f"up, not ours: {', '.join(up)}", flush=True)
 
         c = ec2()
-        r = c.run_instances(
+        r, market = runner.launch(c, dict(
             ImageId=self.ami,
             InstanceType=instance,
             MinCount=1,
@@ -159,9 +159,9 @@ class LinuxS3(Bench):
                     ],
                 }
             ],
-        )
+        ), self.spot)
         iid = r["Instances"][0]["InstanceId"]
-        print(f"  Instance running: {iid}", flush=True)
+        print(f"  Instance running: {iid} ({instance}, {market})", flush=True)
 
         # Billing starts here: everything below must reach the terminate call.
         text = ""
@@ -182,6 +182,7 @@ class LinuxS3(Bench):
                 if re.search(r"^(COMPLETE|INCOMPLETE):", text, re.M):
                     break
         finally:
+            reclaimed = runner.interrupted(c, iid)
             c.terminate_instances(InstanceIds=[iid])  # only what we launched
 
         log.write_text(text)
@@ -190,6 +191,7 @@ class LinuxS3(Bench):
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["instance_id"] = iid
         row["log"] = log.name
+        row["interrupted"] = reclaimed
         # Both spellings: stored logs still say RUN INVALID.
         row["allowance_exceeded"] = len(
             re.findall(r"allowance_exceeded.*(?:RUN INVALID|EC2 SHAPED)", text)

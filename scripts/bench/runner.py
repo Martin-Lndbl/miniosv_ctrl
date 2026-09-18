@@ -13,6 +13,7 @@ from pathlib import Path
 
 import boto3
 import pandas as pd
+from botocore.exceptions import ClientError
 
 ROOT = Path(__file__).resolve().parents[2]
 # Sweepable, but a runner parameter rather than a compiled-in knob: the image is
@@ -101,7 +102,49 @@ COMMON_METRICS = {
     # fixed at 443: http dials 80.
     "target_ip": (r"^target: ([\d.]+):\d+", str),
     "target_port": (r"^target: [\d.]+:(\d+)", int),
+    # Where the machine came from: spot when the sweep ran with --spot.
+    "market": (r"Instance running: i-[0-9a-f]+ \([^)]*?(spot|on-demand)\)", str),
 }
+
+
+def launch(c, run_kwargs: dict, spot: bool = False) -> tuple[dict, str]:
+    """run_instances, on the market asked for. Spot is a one-time request at
+    the default max price (the on-demand rate), terminated if reclaimed; a
+    run is minutes and a c6in.16xlarge costs about a tenth that way. There
+    is no fallback: a run that asked for spot and got on-demand would be
+    billed at ten times what was expected, so it fails instead. Mirrored in
+    miniosv/scripts/aws-deploy.py, which cannot import this."""
+    if not spot:
+        return c.run_instances(**run_kwargs), "on-demand"
+    kwargs = dict(
+        run_kwargs,
+        InstanceMarketOptions={
+            "MarketType": "spot",
+            "SpotOptions": {
+                "SpotInstanceType": "one-time",
+                "InstanceInterruptionBehavior": "terminate",
+            },
+        },
+    )
+    try:
+        return c.run_instances(**kwargs), "spot"
+    except ClientError as e:
+        err = e.response.get("Error", {})
+        raise SystemExit(
+            f"spot requested but not provided: {err.get('Code')}: "
+            f"{err.get('Message')} (drop --spot to run on-demand)"
+        ) from e
+
+
+def interrupted(c, iid: str) -> bool:
+    """Whether EC2 reclaimed a spot instance under a run. Asked before our own
+    terminate, whose reason is Client.UserInitiatedShutdown."""
+    try:
+        r = c.describe_instances(InstanceIds=[iid])
+        inst = r["Reservations"][0]["Instances"][0]
+    except (ClientError, IndexError, KeyError):
+        return False
+    return inst.get("StateReason", {}).get("Code") == "Server.SpotInstanceTermination"
 
 
 def ec2():
@@ -138,6 +181,7 @@ class Bench:
     instance_tag: str = ""  # EC2 Name tag, for stray cleanup
     default_instance: str = "c6in.8xlarge"
     max_vm_seconds: int = 110  # money guard: billing starts at launch
+    spot: bool = False  # ask for a spot instance; see launch()
     # The final summary line's "best" figure: which column, which direction
     # counts as better, and its unit. Throughput benches want the max Gbps;
     # a latency bench like duckdb-tpch wants the min ms.
@@ -250,6 +294,13 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         help="S3 address to compile in; resolved per invocation when "
         "omitted, and front-ends do not perform alike",
     )
+    ap.add_argument(
+        "--spot",
+        action="store_true",
+        help="launch spot instances (about a tenth of the price); the sweep "
+        "fails if one cannot be provided, and a run reclaimed mid-way is an "
+        "invalid row, not a retry",
+    )
     ap.add_argument("--dry-run", action="store_true")
     for knob, (_env, parser) in bench.knobs.items():
         ap.add_argument(
@@ -262,6 +313,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     bench.max_vm_seconds = a.max_vm_seconds
+    bench.spot = a.spot
 
     axis, _, raw = a.sweep.partition("=")
     if not raw:
@@ -305,6 +357,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     print(
         f"bench    : {bench.name}"
         f"\ninstance : {'swept' if axis == INSTANCE_AXIS else a.instance}"
+        f" ({'spot' if a.spot else 'on-demand'})"
         f"\nvm cap   : {a.max_vm_seconds}s per run"
         f"\ncooldown : {a.cooldown}s between runs"
         f"\naxis     : {axis} = {values}"
@@ -353,6 +406,8 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
                 if "VcpuLimitExceeded" not in str(e) or attempt == 5:
                     raise
                 row = None
+            if row is not None and row.get("interrupted"):
+                print("    WARN: EC2 reclaimed the spot instance mid-run", flush=True)
             log = out.parent / "logs" / str((row or {}).get("log") or "")
             if row is not None and (bench.valid(row) or not log.is_file()
                                     or "VcpuLimitExceeded" not in log.read_text(errors="replace")):
