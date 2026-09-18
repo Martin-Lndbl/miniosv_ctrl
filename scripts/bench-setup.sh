@@ -58,6 +58,26 @@ That recipe owns the bucket and the gateway endpoint; this one only adds to them
     set +a
     : "${AWS_BUCKET:?no AWS_BUCKET in $BENCH_ENV}"
     : "${AWS_REGION:?no AWS_REGION in $BENCH_ENV}"
+    bench_region_check
+}
+
+# Refuse a bucket that is not in $AWS_REGION. The guests dial
+# <bucket>.s3.<region>.amazonaws.com through a gateway endpoint that exists
+# in one region only, so a mismatch would either 403 at the bucket policy or,
+# with a looser policy, bill every byte as cross-region transfer. Checked
+# wherever a bucket name and a region first meet; scripts/bench/runner.py
+# repeats it before every sweep.
+bench_region_check() {
+    local where
+    where=$(aws s3api get-bucket-location --bucket "$AWS_BUCKET" \
+        --query LocationConstraint --output text 2>/dev/null) \
+        || bench_die "cannot read the region of s3://$AWS_BUCKET -- wrong account, or no such bucket"
+    case "$where" in
+        None|null|"") where=us-east-1 ;;   # the API's spelling of us-east-1
+        EU) where=eu-west-1 ;;             # legacy spelling
+    esac
+    [ "$where" = "$AWS_REGION" ] || bench_die \
+        "s3://$AWS_BUCKET is in $where, but AWS_REGION is $AWS_REGION -- every byte would cross regions. Fix .env or move the bucket."
 }
 
 # The S3 gateway endpoint the guests read through, on stdout.

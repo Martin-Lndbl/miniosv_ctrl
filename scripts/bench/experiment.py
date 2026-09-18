@@ -149,6 +149,9 @@ def main() -> int:
             f"`just setup {x['bench']}` once, then retry"
         )
 
+    if not a.dry_run:
+        runner.check_bucket_region()
+
     fixed = x.get("fixed", {})
     # Once per experiment: S3 front-ends do not perform alike.
     ip = x.get("target_ip") or runner.target_ip()

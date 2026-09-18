@@ -38,6 +38,28 @@ reproduce name *args:
     nix develop "{{ justfile_directory() }}#rust" --command python3 \
         "{{ justfile_directory() }}/scripts/bench/experiment.py" "$@"
 
+# Queue experiments on spot instances, detached from this shell, e.g.
+# 'just queue miniosv-sf10-query linux-sf10-query-parity --interleave --ttl 2h'
+queue *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix develop "{{ justfile_directory() }}#rust" --command python3 \
+        "{{ justfile_directory() }}/scripts/bench/runqueue.py" submit "$@"
+
+# Progress of the latest queue
+queue-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix develop "{{ justfile_directory() }}#rust" --command python3 \
+        "{{ justfile_directory() }}/scripts/bench/runqueue.py" status
+
+# End the latest queue: the run in progress, its instances and images
+queue-stop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix develop "{{ justfile_directory() }}#rust" --command python3 \
+        "{{ justfile_directory() }}/scripts/bench/runqueue.py" stop
+
 # List stored experiments, grouped by the question they answer
 experiments:
     @find "{{ justfile_directory() }}/experiments" -name '*.toml' | sort \

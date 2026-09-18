@@ -157,6 +157,32 @@ def ec2():
     return boto3.client("ec2", region_name=os.environ["AWS_REGION"])
 
 
+def bucket_region() -> str:
+    """Where AWS_BUCKET lives, in the region names everything else uses."""
+    s3 = boto3.client("s3", region_name=os.environ["AWS_REGION"])
+    where = s3.get_bucket_location(Bucket=os.environ["AWS_BUCKET"])["LocationConstraint"]
+    return {None: "us-east-1", "EU": "eu-west-1"}.get(where, where)
+
+
+def check_bucket_region() -> None:
+    """Refuse a bucket outside AWS_REGION before anything is built or
+    launched. The guests dial <bucket>.s3.<region>.amazonaws.com through a
+    gateway endpoint that exists in one region only, so a mismatch would
+    either 403 at the bucket policy or, with a looser policy, bill every byte
+    as cross-region transfer. scripts/bench-setup.sh makes the same check
+    for the shell recipes."""
+    region, bucket = os.environ["AWS_REGION"], os.environ["AWS_BUCKET"]
+    try:
+        where = bucket_region()
+    except ClientError as e:
+        raise SystemExit(f"cannot read the region of s3://{bucket}: {e}") from e
+    if where != region:
+        raise SystemExit(
+            f"s3://{bucket} is in {where}, but AWS_REGION is {region}: every byte "
+            f"would cross regions. Fix .env or move the bucket."
+        )
+
+
 def target_ip() -> str:
     """Resolve fresh: S3 rotated the address three times in one afternoon."""
     host = f"{os.environ['AWS_BUCKET']}.s3.{os.environ['AWS_REGION']}.amazonaws.com"
@@ -349,6 +375,8 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
     for req in ("AWS_BUCKET", "AWS_REGION"):
         if req not in os.environ:
             raise SystemExit(f"{req} missing — run `just setup` for this bench")
+    if not a.dry_run:
+        check_bucket_region()
 
     plan = (
         [(v, r) for r in range(1, a.reps + 1) for v in values]

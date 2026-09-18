@@ -98,6 +98,30 @@ subnet instead; `on-demand` never asks. A run EC2 reclaims mid-way is an
 invalid row. Each row records the `market` and `zone` it actually ran in.
 `just bench` and `just deploy` default to on-demand.
 
+## Queueing experiments
+
+```sh
+just queue miniosv-sf10-query linux-sf10-query-parity --interleave   # rep-major across both
+just queue miniosv-tls-100g --reps 1 --ttl 90m --dry-run             # the checks only
+just queue-status
+just queue-stop
+```
+
+A queue is a runner in its own session: it outlives the shell, the terminal
+and the ssh session that started it. It runs the experiments on spot,
+sequentially or rep-major across them (`--interleave`, so S3 drift lands on
+every arm alike), waits ten minutes and tries again whenever no zone has a
+spot instance, and stops itself at its TTL, two hours unless told otherwise
+and three at most: it ends the run in progress, terminates every instance of
+ours launched since it began and deregisters their images. Before anything
+detaches it checks what would otherwise fail later with nobody watching:
+credentials, that the bucket is in `AWS_REGION` (a bucket elsewhere would
+403 at the endpoint policy or bill every byte as cross-region transfer, and
+`just setup` and every sweep refuse it too), the subnet and its S3 gateway
+endpoint, each experiment's plan, the blob the S3 benches read, that no queue
+is running and no instance of ours is up. State, events and the per-experiment
+logs live in `results/queue/<id>/`.
+
 ## Results and plots
 
 Rows land in `results/<subject>/<name>.csv`, derived from the experiment file's
