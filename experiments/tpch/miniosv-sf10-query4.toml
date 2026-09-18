@@ -8,7 +8,7 @@ setting, so both stacks get the same knob. Run the two halves at the same
 time (two instances, one per stack), so S3's drift lands on both alike.
 
     just plot results/tpch/miniosv-sf10-query4.csv results/tpch/linux-sf10-query4-parity.csv \\
-        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+        --series note --x threads --facet query --value-col query_ms --ylabel "Query latency (ms)"
 """
 
 bench    = "apps/bench/duckdb-tpch"
@@ -34,4 +34,4 @@ workers = 2
 conns   = 64
 
 [env]
-BENCH_NOTE = "miniOSv, {threads} threads"
+BENCH_NOTE = "miniOSv"

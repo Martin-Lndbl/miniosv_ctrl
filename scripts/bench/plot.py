@@ -134,8 +134,34 @@ def plot(
     bar: bool = False,
     log_scale: bool = False,
     box: bool = False,
+    x_col: str | None = None,
+    facet_col: str | None = None,
 ) -> None:
     c = INK[mode]
+    if x_col:
+        df = df.assign(axis=x_col, axis_value=df[x_col])
+    plt.rcParams.update(rc(c))
+    facets = ([(None, df)] if not facet_col else
+              [(v, df[df[facet_col] == v]) for v in sorted(df[facet_col].unique())])
+    fig, axes = plt.subplots(1, len(facets), figsize=(8 if len(facets) == 1 else 2.8 * len(facets), 4.4),
+                             dpi=160, sharey=True, squeeze=False, layout="constrained")
+    top = df[df["valid"]][value_col].max()
+
+    for i, (ax, (facet, fdf)) in enumerate(zip(axes[0], facets)):
+        draw(ax, fdf, c, i == 0, facet, facet_col, series_col, title, value_col, ylabel,
+             unit, bar, log_scale, box, top, named=bool(x_col))
+    if facet_col:
+        handles, labels = axes[0][0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="lower center", ncol=len(labels), bbox_to_anchor=(0.5, -0.12),
+                   labelcolor=c["text"])
+        if title:
+            fig.suptitle(title)
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+
+
+def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabel, unit,
+         bar, log_scale, box, top, named=False):
     axis = str(df["axis"].iloc[0])
     instance = str(df["instance"].iloc[0])
     stats = summarise(df, series_col, value_col)
@@ -143,7 +169,7 @@ def plot(
                     key=lambda v: rank(axis, v, {v: i for i, v in
                                                   enumerate(dict.fromkeys(df["axis_value"]))}))
     # Named axes (categories, or any bar/box chart) are placed evenly, not by value.
-    named = bar or box or axis == "instance" or not all(numeric(v) for v in order)
+    named = named or bar or box or axis == "instance" or not all(numeric(v) for v in order)
     at = {v: i for i, v in enumerate(order)}
     xof = (lambda col: col.map(at)) if named else (lambda col: col)
     groups = (
@@ -151,9 +177,6 @@ def plot(
         if series_col
         else [(None, stats)]
     )
-
-    plt.rcParams.update(rc(c))
-    fig, ax = plt.subplots(figsize=(8, 4.8), dpi=160)
 
     ceiling = None
     if value_col == "gbps":
@@ -288,7 +311,7 @@ def plot(
             label="invalid run (excluded)",
         )
 
-    if not bar and not box:
+    if not bar and not box and value_col == "gbps":
         # Bars and boxes already show every value; this is the line case's only one.
         best = stats.loc[stats["mean"].idxmax()]
         ax.annotate(
@@ -311,10 +334,11 @@ def plot(
         ax.set_yscale("log")
     else:
         # Anchored at zero: cropping a magnitude's baseline exaggerates slope.
-        ax.set_ylim(0, max(ceiling or 0, stats["hi"].max()) * 1.12)
+        ax.set_ylim(0, max(ceiling or 0, top) * 1.12)
 
     ax.set_xlabel(LABELS.get(axis, axis))
-    ax.set_ylabel(ylabel)
+    if first:
+        ax.set_ylabel(ylabel)
     reps = int(stats["n"].max())
     # Say what the marks mean, since a box and a mean-with-band are read
     # differently: the box is quartiles over reps, the band is min-max.
@@ -327,22 +351,17 @@ def plot(
         f"{k}={tick(k, df[k].iloc[0])}" for k in LABELS if k in df and k != axis
     )
     spread = spread.format(fixed)
-    ax.set_title(title or f"{ylabel.split(' (')[0]} vs {axis}")
-    ax.text(
-        0,
-        1.02,
-        (spread if named else f"{instance} · {spread}"),
-        transform=ax.transAxes,
-        fontsize=8.5,
-        color=c["muted"],
-    )
-
-    if handles or ax.get_legend_handles_labels()[0]:
-        ax.legend(handles=handles or None, labelcolor=c["text"])
-
-    fig.tight_layout()
-    fig.savefig(out, bbox_inches="tight")
-    plt.close(fig)
+    if facet is not None:
+        ax.set_title(f"{LABELS.get(facet_col, facet_col)} {tick(facet_col, facet)}", fontsize=10)
+    else:
+        ax.set_title(title or f"{ylabel.split(' (')[0]} vs {axis}")
+    if first and facet is None:
+        ax.text(0, 1.02, (spread if named else f"{instance} · {spread}"),
+                transform=ax.transAxes, fontsize=8.5, color=c["muted"])
+        if handles or ax.get_legend_handles_labels()[0]:
+            ax.legend(handles=handles or None, labelcolor=c["text"])
+    elif first:
+        ax.figure.text(0.01, -0.04, f"{instance} · {spread}", fontsize=8.5, color=c["muted"])
 
 
 def main() -> int:
@@ -363,6 +382,8 @@ def main() -> int:
         "--series", default=None, help="column to split into one line per value"
     )
     ap.add_argument("--title", default=None)
+    ap.add_argument("--x", default=None, help="column for the x axis instead of the sweep's axis")
+    ap.add_argument("--facet", default=None, help="column to split into one panel per value")
     ap.add_argument(
         "--value-col", default="gbps", help="CSV column to plot on the y-axis"
     )
@@ -398,7 +419,7 @@ def main() -> int:
     mode = "dark" if a.dark else "light"
     out = a.out or a.csv.with_name(f"{a.csv.stem}{'-dark' if a.dark else ''}.png")
     plot(df, out, mode, a.series, a.title, a.value_col, a.ylabel, a.unit,
-         a.bar, a.log_scale, a.box)
+         a.bar, a.log_scale, a.box, a.x, a.facet)
     valid = int(df["valid"].sum())
     print(f"wrote {out} ({valid}/{len(df)} runs valid)")
     return 0
