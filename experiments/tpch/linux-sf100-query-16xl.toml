@@ -1,0 +1,37 @@
+name = "linux-sf100-query-16xl"
+title = "DuckDB on Linux: all 22 TPC-H queries at sf=100 on c6in.16xlarge"
+description = """
+The Linux arm of the sf=100 suite as deployed: GRO on, a queue per vCPU,
+nothing tuned toward the unikernel. The parity arm
+(linux-sf100-query-16xl-parity) stays on file for the receive-path question.
+256 DuckDB threads on both arms, from the sf=100 Q01 thread sweep on this
+instance; keep_going because most of these queries have not run at sf=100
+before.
+
+    just plot results/tpch/miniosv-sf100-query-16xl.csv results/tpch/linux-sf100-query-16xl.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+"""
+bench    = "competitors/duckdb-linux"
+instance = "c6in.16xlarge"
+axis     = "query"
+grid     = { query = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "100"
+pin     = ""
+threads = 256
+
+[env]
+BENCH_NOTE = "Linux"
