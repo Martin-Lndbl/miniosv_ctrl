@@ -1,0 +1,35 @@
+name = "miniosv-sf100-q1-threads-16xl"
+title = "DuckDB-on-miniOSv: TPC-H Q01 at sf=100 on c6in.16xlarge, 64-256 threads"
+description = """
+Q01 at sf=100 on the 64-vCPU instance, DuckDB's thread count swept from the
+cpu count to four times it, to find the setting the sf=100 comparison should
+use. Q01 scans lineitem with a small aggregate: the widest scan of the suite
+and no memory risk. Run the two halves at the same time.
+
+    just plot results/tpch/miniosv-sf100-q1-threads-16xl.csv results/tpch/linux-sf100-q1-threads-16xl.csv \\
+        --series note --x threads --value-col query_ms --ylabel "Query latency (ms)"
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.16xlarge"
+axis     = "threads"
+grid     = { threads = [64, 128, 192, 256], query = [1] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 64
+
+[env]
+BENCH_NOTE = "miniOSv"

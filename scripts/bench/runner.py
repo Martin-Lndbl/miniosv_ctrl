@@ -346,14 +346,19 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
 
         print(f"--- {axis}={value} rep={rep} ---", flush=True)
         ran_one = True
-        row = bench.run_once(instance, out.parent / "logs", cfg, ip)
-        for _ in range(5):  # the account's vCPU quota counts instances still shutting down
-            log = out.parent / "logs" / str(row.get("log") or "")
-            if bench.valid(row) or not log.is_file() or "VcpuLimitExceeded" not in log.read_text(errors="replace"):
+        for attempt in range(6):  # the vCPU quota counts instances still shutting down
+            try:
+                row = bench.run_once(instance, out.parent / "logs", cfg, ip)
+            except Exception as e:  # noqa: BLE001
+                if "VcpuLimitExceeded" not in str(e) or attempt == 5:
+                    raise
+                row = None
+            log = out.parent / "logs" / str((row or {}).get("log") or "")
+            if row is not None and (bench.valid(row) or not log.is_file()
+                                    or "VcpuLimitExceeded" not in log.read_text(errors="replace")):
                 break
             print("    vCPU quota hit; retrying in 90 s", flush=True)
             time.sleep(90)
-            row = bench.run_once(instance, out.parent / "logs", cfg, ip)
         row |= {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "instance": instance,
