@@ -102,9 +102,9 @@ def main() -> int:
     ap.add_argument(
         "--market",
         choices=runner.MARKETS,
-        default="spot-or-on-demand",
-        help="where the machines come from; the default asks for spot and "
-        "takes on-demand when there is none",
+        default="spot",
+        help="where the machines come from; the default is spot in any zone "
+        "of the VPC, and the experiment fails if no zone has one",
     )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")

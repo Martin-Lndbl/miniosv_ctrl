@@ -89,13 +89,14 @@ Useful flags: `--dry-run` prints the plan without launching anything,
 `--no-plot` stops after the data, and `--reps`, `--cooldown` and
 `--point-cooldown` override the file for one run.
 
-Experiments ask for spot instances, about a tenth of the on-demand price (a
-c6in.16xlarge was $0.39 against $3.90 an hour in eu-north-1 on 2026-09-18),
-and take on-demand when there is no spot capacity: `--market` defaults to
-`spot-or-on-demand`, `spot` fails instead of falling back, `on-demand` never
-asks. A run EC2 reclaims mid-way is an invalid row. The CSV's `market` column
-records where each row actually ran, which under the default is not always
-what was asked for. `just bench` and `just deploy` default to on-demand.
+Experiments run on spot instances, about a tenth of the on-demand price (a
+c6in.16xlarge was $0.39 against $3.90 an hour in eu-north-1 on 2026-09-18).
+Spot capacity is per zone, so a request is tried in every zone of the VPC
+before the verdict: `--market spot`, the default, fails the experiment if no
+zone provides one; `spot-or-on-demand` falls back to on-demand in the .env
+subnet instead; `on-demand` never asks. A run EC2 reclaims mid-way is an
+invalid row. Each row records the `market` and `zone` it actually ran in.
+`just bench` and `just deploy` default to on-demand.
 
 ## Results and plots
 

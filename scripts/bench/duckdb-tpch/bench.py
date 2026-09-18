@@ -211,6 +211,10 @@ class DuckdbTpch(Bench):
         "cpus_query_busy": (r"^CPUS: name=q\d\d busy=(\d+)", int),
         "probe_failed": (r"^PROBE: name=\S+ (FAILED)", str),
         "cpuprobe_ok": (r"^(?:IN)?COMPLETE: cpuprobe ok=(\d+)", int),
+        # Where the machine came from: the market (not always the one asked
+        # for under spot-or-on-demand) and the zone spot was found in.
+        "market": (r"Instance running: i-[0-9a-f]+ \([^)]*?(spot|on-demand)\)", str),
+        "zone": (r"Instance running: i-[0-9a-f]+ \(\S+, ([a-z]+-[a-z]+-\d[a-z]), (?:spot|on-demand)\)", str),
     }
 
     def summary(self, row: dict) -> str:
