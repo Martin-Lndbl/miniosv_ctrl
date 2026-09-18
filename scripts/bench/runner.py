@@ -105,22 +105,41 @@ COMMON_METRICS = {
     # The market the machine actually came from, which under
     # spot-or-on-demand is not always the one asked for.
     "market": (r"Instance running: i-[0-9a-f]+ \([^)]*?(spot|on-demand)\)", str),
+    "zone": (r"Instance running: i-[0-9a-f]+ \(\S+, ([a-z]+-[a-z]+-\d[a-z]), (?:spot|on-demand)\)", str),
 }
 
 MARKETS = ("on-demand", "spot", "spot-or-on-demand")
 
 
-def launch(c, run_kwargs: dict, market: str = "on-demand") -> tuple[dict, str]:
-    """run_instances, on the market asked for; returns the market used. Spot
-    is a one-time request at the default max price (the on-demand rate),
-    terminated if reclaimed; a run is minutes and a c6in.16xlarge costs
-    about a tenth that way. "spot" fails if refused: a run that asked for
-    spot and got on-demand would be billed at ten times what was expected.
-    "spot-or-on-demand" prints the refusal and retries on-demand. Mirrors
-    miniosv/scripts/aws-deploy.py, which cannot import this."""
+def spot_subnets(c, subnet_id: str | None) -> list[tuple[str | None, str]]:
+    """The given subnet's zone first, then the other zones of its VPC through
+    their default subnets. Spot capacity is per zone, and an S3 gateway
+    endpoint on the VPC's main route table serves every subnet alike."""
+    if not subnet_id:
+        return [(None, "the default zone")]
+    desc = c.describe_subnets(SubnetIds=[subnet_id])["Subnets"][0]
+    others = c.describe_subnets(
+        Filters=[{"Name": "vpc-id", "Values": [desc["VpcId"]]},
+                 {"Name": "default-for-az", "Values": ["true"]}]
+    )["Subnets"]
+    rest = sorted((s for s in others if s["SubnetId"] != subnet_id), key=lambda s: s["AvailabilityZone"])
+    return [(subnet_id, desc["AvailabilityZone"])] + [(s["SubnetId"], s["AvailabilityZone"]) for s in rest]
+
+
+def launch(c, run_kwargs: dict, market: str = "on-demand") -> tuple[dict, str, str]:
+    """run_instances, on the market asked for; returns the response, the
+    market used and the zone. Spot is a one-time request at the default max
+    price (the on-demand rate), terminated if reclaimed; a run is minutes
+    and a c6in.16xlarge costs about a tenth that way. It is tried in every
+    zone of the subnet's VPC before the verdict. "spot" fails if none
+    provides one: a run that asked for spot and got on-demand would be
+    billed at ten times what was expected. "spot-or-on-demand" then retries
+    on-demand in the subnet given. Mirrors miniosv/scripts/aws-deploy.py,
+    which cannot import this."""
+    zones = spot_subnets(c, run_kwargs.get("SubnetId"))
     if market == "on-demand":
-        return c.run_instances(**run_kwargs), "on-demand"
-    kwargs = dict(
+        return c.run_instances(**run_kwargs), "on-demand", zones[0][1]
+    spot = dict(
         run_kwargs,
         InstanceMarketOptions={
             "MarketType": "spot",
@@ -130,16 +149,21 @@ def launch(c, run_kwargs: dict, market: str = "on-demand") -> tuple[dict, str]:
             },
         },
     )
-    try:
-        return c.run_instances(**kwargs), "spot"
-    except ClientError as e:
-        err = e.response.get("Error", {})
-        if market != "spot-or-on-demand":
-            raise SystemExit(
-                f"spot requested but not provided: {err.get('Code')}: {err.get('Message')}"
-            ) from e
-        print(f"    spot not provided ({err.get('Code')}); falling back to on-demand", flush=True)
-        return c.run_instances(**run_kwargs), "on-demand"
+    last: dict = {}
+    for subnet, zone in zones:
+        if subnet:
+            spot["SubnetId"] = subnet
+        try:
+            return c.run_instances(**spot), "spot", zone
+        except ClientError as e:
+            last = e.response.get("Error", {})
+            print(f"    spot not provided in {zone} ({last.get('Code')})", flush=True)
+    if market != "spot-or-on-demand":
+        raise SystemExit(
+            f"spot requested but not provided: {last.get('Code')}: {last.get('Message')}"
+        )
+    print("    falling back to on-demand", flush=True)
+    return c.run_instances(**run_kwargs), "on-demand", zones[0][1]
 
 
 def interrupted(c, iid: str) -> bool:

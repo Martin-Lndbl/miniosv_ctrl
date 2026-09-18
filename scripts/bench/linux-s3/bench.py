@@ -141,7 +141,7 @@ class LinuxS3(Bench):
                   f"up, not ours: {', '.join(up)}", flush=True)
 
         c = ec2()
-        r, market = runner.launch(c, dict(
+        r, market, zone = runner.launch(c, dict(
             ImageId=self.ami,
             InstanceType=instance,
             MinCount=1,
@@ -161,7 +161,7 @@ class LinuxS3(Bench):
             ],
         ), self.market)
         iid = r["Instances"][0]["InstanceId"]
-        print(f"  Instance running: {iid} ({instance}, {market})", flush=True)
+        print(f"  Instance running: {iid} ({instance}, {zone}, {market})", flush=True)
 
         # Billing starts here: everything below must reach the terminate call.
         text = ""

@@ -1,0 +1,42 @@
+name = "miniosv-sf100-query-16xl"
+title = "DuckDB-on-miniOSv: all 22 TPC-H queries at sf=100 on c6in.16xlarge"
+description = """
+The full suite at sf=100 on the 64-vCPU instance (100 Gbps, 128 GiB), the
+miniOSv arm of the comparison with linux-sf100-query-16xl-parity. 256 DuckDB
+threads on both arms: the sf=100 Q01 thread sweep on this instance
+(miniosv-sf100-q1-threads-16xl, linux-sf100-q1-threads-16xl) put 256 ahead of
+192 and 128 on both, 3.4 s against 3.5-4.2 and 5.1-5.2 on miniOSv.
+
+Only Q01 and Q06 had run at sf=100 before this suite, so keep_going: a query
+that fails or hits the 900 s cap is one invalid row, not the end of the sweep.
+sf=100 has no canned answers, so `match` reads unchecked; correctness rests
+on the sf=1 suite.
+
+    just plot results/tpch/miniosv-sf100-query-16xl.csv results/tpch/linux-sf100-query-16xl-parity.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+"""
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.16xlarge"
+axis     = "query"
+grid     = { query = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 64
+threads = 256
+
+[env]
+BENCH_NOTE = "miniOSv"

@@ -97,6 +97,9 @@ class DuckdbLinux(Bench):
     headline_unit = "ms"
 
     metrics = {"scheme": (r"^tpch-linux: sf=[\d.]+, \d+ quer\w+, bucket \S+ \((\w+)\)", str),
+               # Where the machine came from: market and zone, as the S3 driver records them.
+               "market": (r"Instance running: i-[0-9a-f]+ \([^)]*?(spot|on-demand)\)", str),
+               "zone": (r"Instance running: i-[0-9a-f]+ \(\S+, ([a-z]+-[a-z]+-\d[a-z]), (?:spot|on-demand)\)", str),
                "pinned_ip": (r"^pinned \S+ -> ([\d.]+)", str),
                # Read back off the NIC, not echoed from the request, so these
                # say what the run actually had rather than what it asked for.
@@ -220,7 +223,7 @@ class DuckdbLinux(Bench):
             )
 
         c = ec2()
-        r, market = runner.launch(c, dict(
+        r, market, zone = runner.launch(c, dict(
             ImageId=self.ami,
             InstanceType=instance,
             MinCount=1,
@@ -239,7 +242,7 @@ class DuckdbLinux(Bench):
             ],
         ), self.market)
         iid = r["Instances"][0]["InstanceId"]
-        print(f"  Instance running: {iid} ({instance}, {market})", flush=True)
+        print(f"  Instance running: {iid} ({instance}, {zone}, {market})", flush=True)
 
         text = ""
         try:
