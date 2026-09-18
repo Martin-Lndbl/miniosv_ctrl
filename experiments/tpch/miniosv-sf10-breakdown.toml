@@ -1,0 +1,37 @@
+name = "miniosv-sf10-breakdown"
+title = "DuckDB-on-miniOSv: where the wall time goes, four queries, sf=10, 64 threads"
+description = """
+The miniOSv half of the breakdown pair: the four suite queries at 64
+threads, with the per-request stats the arm always records. Run together
+with linux-sf10-breakdown so both see the same S3, then
+
+    just breakdown results/tpch/miniosv-sf10-breakdown.csv \\
+        --linux results/tpch/linux-sf10-breakdown.csv --out results/tpch/sf10-breakdown.png \\
+        --title "TPC-H sf=10, c6in.8xlarge, 64 threads: where the wall time goes"
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.8xlarge"
+axis     = "query"
+grid     = { query = [1, 6, 9, 18] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "10"
+workers = 2
+conns   = 64
+threads = 64
+
+[env]
+BENCH_NOTE = "miniOSv"

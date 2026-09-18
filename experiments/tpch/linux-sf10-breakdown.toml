@@ -1,0 +1,35 @@
+name = "linux-sf10-breakdown"
+title = "DuckDB on Linux at receive parity, with its HTTP log: where the wall time goes, sf=10, 64 threads"
+description = """
+The Linux half of the breakdown pair: the four suite queries at 64 threads,
+each with a second pass under DuckDB's own HTTP log (httplog=1), which is
+where Linux reports a request's life. See miniosv-sf10-breakdown.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "c6in.8xlarge"
+axis     = "query"
+grid     = { query = [1, 6, 9, 18] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf     = "10"
+pin    = ""
+gro    = "off"
+queues = "2"
+threads = 64
+httplog = "1"
+
+[env]
+BENCH_NOTE = "Linux"

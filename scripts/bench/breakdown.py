@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Where a query's wall time goes, from the miniOSv arm's own request stats.
+"""Where a query's wall time goes, on miniOSv and (with its HTTP log) on Linux.
 
-    scripts/bench/breakdown.py results/tpch/miniosv-sf10-query4.csv --threads 64 \\
-        --linux results/tpch/linux-sf10-query4-parity.csv
+    scripts/bench/breakdown.py results/tpch/miniosv-sf10-breakdown.csv \\
+        --linux results/tpch/linux-sf10-breakdown.csv
 
-Wall time splits into the span with at least one S3 request outstanding
-(net_active_ms) and DuckDB running with none. The outstanding span is
-apportioned by a request's average life: S3's first-byte latency, the bytes
-on the wire, and what remains -- queueing, wake-up, parsing -- which is the
-guest's share. A Linux CSV with DuckDB's HTTP log (httplog=1) adds that
-stack's per-request p50 as the footer's reference.
+Wall time splits into the span with at least one S3 request outstanding and
+DuckDB running with none. The outstanding span is apportioned by a request's
+average life. On miniOSv the arm measures that life itself: S3's first-byte
+latency, the bytes on the wire, and what remains (queueing, wake-up, parsing)
+is the stack's. Linux reports a request's life through DuckDB's HTTP log
+(httplog=1, a second logged pass whose own wall time is the bar); S3's part of
+it is taken from the miniOSv arm's measurement of the same query, so the
+remainder is what Linux's stack and client add.
 """
 import argparse
 from pathlib import Path
@@ -21,54 +23,80 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 PARTS = [("S3 first byte", "#c0504d"), ("wire transfer", "#e8a33d"),
-         ("guest stack", "#2e7d32"), ("DuckDB, no request outstanding", "#4472c4")]
+         ("stack + client", "#2e7d32"), ("DuckDB, no request outstanding", "#4472c4")]
 
 
-def split(g: pd.DataFrame) -> list[float]:
+def miniosv(g: pd.DataFrame) -> tuple[list[float], float, float, float]:
+    """Wall-time parts, plus the request's S3 first-byte, wire and total ms."""
     m = g.median(numeric_only=True)
     per_call = m["net_ms"] / m["net_calls"]
-    s3 = m["ttfb_us_avg"] / 1000 / per_call
-    wire = m["xfer_us_avg"] / 1000 / per_call
-    guest = max(0.0, 1 - s3 - wire)
+    s3, wire = m["ttfb_us_avg"] / 1000, m["xfer_us_avg"] / 1000
+    stack = max(0.0, per_call - s3 - wire)
     active = m["net_active_ms"]
-    return [active * s3, active * wire, active * guest, max(0.0, m["query_ms"] - active)]
+    parts = [active * s3 / per_call, active * wire / per_call, active * stack / per_call,
+             max(0.0, m["query_ms"] - active)]
+    return parts, s3, wire, per_call
+
+
+def linux(g: pd.DataFrame, s3: float, wire: float) -> list[float]:
+    m = g.median(numeric_only=True)
+    per_req = m["http_ms_sum"] / m["http_n"]
+    floor = min(per_req, s3 + wire)
+    window = m["http_window_ms"]
+    return [window * floor / per_req * s3 / (s3 + wire), window * floor / per_req * wire / (s3 + wire),
+            window * (per_req - floor) / per_req, max(0.0, m["http_profile_ms"] - window)]
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("csv", type=Path, nargs="+")
-    ap.add_argument("--threads", type=int, default=64)
-    ap.add_argument("--linux", type=Path, help="Linux CSV with http_ms_p50, for the footer")
+    ap.add_argument("csv", type=Path, help="the miniOSv arm")
+    ap.add_argument("--linux", type=Path, help="the Linux arm, run with httplog=1")
+    ap.add_argument("--threads", type=int, help="keep one thread count when the CSV has several")
+    ap.add_argument("--title", default=None)
     ap.add_argument("--out", type=Path)
     a = ap.parse_args()
 
-    fig, axes = plt.subplots(1, len(a.csv), figsize=(4.5 * len(a.csv) + 1.5, 4.4), sharey=True, squeeze=False)
-    for ax, csv in zip(axes[0], a.csv):
-        df = pd.read_csv(csv)
-        df = df[(df["threads"] == a.threads) & (df.get("valid", True) != False)]
-        queries = sorted(df["query"].unique())
-        rows = {q: split(df[df["query"] == q]) for q in queries}
-        bottom = [0.0] * len(queries)
-        for i, (label, color) in enumerate(PARTS):
-            vals = [rows[q][i] for q in queries]
-            ax.bar([f"Q{q:02d}" for q in queries], vals, bottom=bottom, color=color, label=label, width=0.6)
-            bottom = [b + v for b, v in zip(bottom, vals)]
-        for x, q in enumerate(queries):
-            s3, wire, guest, _ = rows[q]
-            ax.text(x, bottom[x], f"guest {100 * guest / sum(rows[q]):.1f}%", ha="center", va="bottom", fontsize=8)
-        ax.set_title(f"{csv.stem}  ({a.threads} threads, medians)", fontsize=9)
-        ax.set_ylabel("Query wall time (ms)")
-        ax.grid(axis="y", alpha=0.3)
-    axes[0][0].legend(fontsize=8, loc="upper left")
-    foot = ("The span with a request outstanding, split by the average request's life:\n"
-            "S3 first byte, bytes on the wire, and the rest (queue, wake-up, parse) as the guest's.")
-    if a.linux:
-        lx = pd.read_csv(a.linux)
-        if "http_ms_p50" in lx and lx["http_ms_p50"].notna().any():
-            foot += f"\nLinux DuckDB's own HTTP log on the same bucket: p50 {lx['http_ms_p50'].median():.0f} ms per request."
+    df = pd.read_csv(a.csv)
+    lx = pd.read_csv(a.linux) if a.linux else None
+    for d in (df, lx):
+        if a.threads and d is not None and "threads" in d:
+            d.drop(d[d["threads"] != a.threads].index, inplace=True)
+    if lx is not None:
+        lx = lx[lx["http_n"].notna()]
+    bars = []  # (x, label, parts)
+    for i, q in enumerate(sorted(df["query"].unique())):
+        parts, s3, wire, per_call = miniosv(df[df["query"] == q])
+        if lx is None:
+            bars.append((i, f"Q{q:02d}", parts))
+            continue
+        bars.append((i * 3, f"Q{q:02d}\nminiOSv", parts))
+        lq = lx[lx["query"] == q]
+        if len(lq):
+            bars.append((i * 3 + 1, f"Q{q:02d}\nLinux", linux(lq, s3, wire)))
+        print(f"Q{q:02d}: a request lives {per_call:.1f} ms on miniOSv (S3 first byte {s3:.1f}, wire {wire:.1f})"
+              + (f", {lq['http_ms_sum'].median() / lq['http_n'].median():.1f} ms on Linux" if len(lq) else ""))
+
+    fig, ax = plt.subplots(figsize=(1.1 * len(bars) + 5, 4.6))
+    xs = [b[0] for b in bars]
+    bottom = [0.0] * len(bars)
+    for k, (label, color) in enumerate(PARTS):
+        vals = [b[2][k] for b in bars]
+        ax.bar(xs, vals, bottom=bottom, color=color, label=label, width=0.8)
+        bottom = [b + v for b, v in zip(bottom, vals)]
+    for (x, _, parts), top in zip(bars, bottom):
+        ax.text(x, top, f"{100 * parts[2] / sum(parts):.1f}%", ha="center", va="bottom", fontsize=8)
+    ax.set_xticks(xs, [b[1] for b in bars], fontsize=8)
+    ax.set_ylabel("Query wall time (ms)")
+    ax.set_title(a.title or f"{a.csv.stem}: where the wall time goes (medians)", fontsize=10)
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.01, 1), title="bar label: the stack's share",
+              title_fontsize=7)
+    foot = ("The span with a request outstanding, split by the average request's life. miniOSv measures S3's first byte and\n"
+            "the wire itself; the rest (queue, wake-up, parse, copy) is its stack's. Linux's request life is DuckDB's own HTTP\n"
+            "log (a second, logged pass; its wall time is the bar); its S3 part is the miniOSv arm's for the same query.")
     fig.text(0.01, 0.01, foot, fontsize=7, va="bottom")
-    fig.tight_layout(rect=(0, 0.1, 1, 1))
-    out = a.out or a.csv[0].with_name(a.csv[0].stem + "-breakdown.png")
+    fig.tight_layout(rect=(0, 0.11, 1, 1))
+    out = a.out or a.csv.with_name(a.csv.stem + "-breakdown.png")
     fig.savefig(out, dpi=150)
     print(out.resolve())
     return 0
