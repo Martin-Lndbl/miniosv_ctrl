@@ -49,6 +49,9 @@ OUR_TAGS = ["miniosv-*", "linux-s3-bench", "duckdb-linux-bench"]
 TTL_DEFAULT = 5 * 3600
 TTL_MAX = 6 * 3600
 SPOT_REFUSED = "spot requested but not provided"
+# `aws login` sessions end after a lifetime AWS does not expose; when they
+# do, nothing can launch or terminate, so the queue stops and says so.
+CREDENTIALS_GONE = ("ExpiredToken", "LoginRefreshRequired", "refresh token has expired", "RequestExpired")
 
 
 def duration(text: str) -> int:
@@ -283,6 +286,10 @@ class Runner:
                 x["status"] = "done"
                 return "done"
             tail = log.read_text(errors="replace")[-4000:]
+            if any(m in tail for m in CREDENTIALS_GONE):
+                x["status"] = "credentials expired"
+                x["last"] = tail[-600:]
+                return "credentials"
             if SPOT_REFUSED in tail:
                 x["spot_refusals"] += 1
                 x["status"] = "waiting for spot"
@@ -375,7 +382,7 @@ class Runner:
                         only = f"{x['axis']}={x['values'][i]}"
                         self.event(f"{x['name']} {only} rep {k}")
                         v = self.run_one(x, k, plot=False, only=only)
-                        if v in ("expired", "stopped"):
+                        if v in ("expired", "stopped", "credentials"):
                             verdict = v
                             break
                         if v == "failed":
@@ -392,16 +399,22 @@ class Runner:
             for x in xs:
                 self.event(f"{x['name']}")
                 v = self.run_one(x, x["reps"], plot=True)
-                if v in ("expired", "stopped"):
+                if v in ("expired", "stopped", "credentials"):
                     verdict = v
                     break
                 if v == "failed":
                     self.event(f"{x['name']} FAILED; see its log")
 
-        if verdict in ("expired", "stopped"):
+        if verdict == "credentials":
+            # No sweep is possible without credentials; the run in progress
+            # already failed before launching, so nothing is up.
+            self.event("credentials expired: the aws login session ended; `aws login`, then `just queue` again -- the CSVs resume")
+            self.end_child()
+        elif verdict in ("expired", "stopped"):
             self.event(f"{verdict}: ending the run in progress and sweeping")
             self.end_child()
             self.sweep()
+        if verdict in ("expired", "stopped", "credentials"):
             for x in xs:
                 if x["status"] in ("running", "waiting for spot", "queued"):
                     x["status"] = verdict
