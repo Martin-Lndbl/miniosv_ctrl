@@ -12,8 +12,8 @@ the subnet and its S3 gateway endpoint, each experiment's plan, the blob the
 S3 benches read, no queue already running, no instance of ours already up.
 Then a runner starts in its own session and outlives this shell. It runs the
 experiments with `--market spot`, waits ten minutes and tries again whenever
-no zone has a spot instance, and stops itself at the TTL (two hours unless
-told otherwise, three at most): it ends the experiment it is in, terminates
+no zone has a spot instance, and stops itself at the TTL (five hours unless
+told otherwise, six at most): it ends the experiment it is in, terminates
 every instance of ours launched since the queue began, and deregisters the
 images they booted from. State and logs are under results/queue/<id>/.
 """
@@ -46,8 +46,8 @@ LATEST = QUEUES / "latest"
 # Name tags of everything the drivers launch; aws-deploy.py names its images
 # and instances miniosv-<image>-<time>.
 OUR_TAGS = ["miniosv-*", "linux-s3-bench", "duckdb-linux-bench"]
-TTL_DEFAULT = 2 * 3600
-TTL_MAX = 3 * 3600
+TTL_DEFAULT = 5 * 3600
+TTL_MAX = 6 * 3600
 SPOT_REFUSED = "spot requested but not provided"
 
 
@@ -486,7 +486,7 @@ def main() -> int:
     s.add_argument("experiments", nargs="+")
     s.add_argument("--interleave", action="store_true", help="rep-major across the experiments, so drift lands on all")
     s.add_argument("--reps", type=int, default=None, help="overrides every experiment's reps")
-    s.add_argument("--ttl", type=duration, default=TTL_DEFAULT, help="how long the queue may live (default 2h, max 3h)")
+    s.add_argument("--ttl", type=duration, default=TTL_DEFAULT, help="how long the queue may live (default 5h, max 6h)")
     s.add_argument("--retry-wait", type=duration, default=600, help="between spot attempts (default 10m)")
     s.add_argument("--market", choices=runner.MARKETS, default="spot")
     s.add_argument("--dry-run", action="store_true", help="the checks and the plan, no runner")

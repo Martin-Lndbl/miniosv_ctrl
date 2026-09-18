@@ -111,8 +111,8 @@ A queue is a runner in its own session: it outlives the shell, the terminal
 and the ssh session that started it. It runs the experiments on spot,
 sequentially or rep-major across them (`--interleave`, so S3 drift lands on
 every arm alike), waits ten minutes and tries again whenever no zone has a
-spot instance, and stops itself at its TTL, two hours unless told otherwise
-and three at most: it ends the run in progress, terminates every instance of
+spot instance, and stops itself at its TTL, five hours unless told otherwise
+and six at most: it ends the run in progress, terminates every instance of
 ours launched since it began and deregisters their images. Before anything
 detaches it checks what would otherwise fail later with nobody watching:
 credentials, that the bucket is in `AWS_REGION` (a bucket elsewhere would
