@@ -12,6 +12,12 @@ that fails or hits the 900 s cap is one invalid row, not the end of the sweep.
 sf=100 has no canned answers, so `match` reads unchecked; correctness rests
 on the sf=1 suite.
 
+8 workers x 32 connections, not the 4 x 64 the first pass ran: with TLB
+flushes coalesced and the response buffer kept per thread, the heavy joins
+are worker-bound (Q08 7.3 s at 8 workers against 8.8 s at 4 and 7.8 s at
+16), where before the fix every worker count landed on the same shootdown
+mutex (Q08 21.5 s at 4, 22.1 s at 8, 24.1 s at 16).
+
     just plot results/tpch/miniosv-sf100-query-16xl.csv results/tpch/linux-sf100-query-16xl-parity.csv \\
         --series note --box --value-col query_ms --ylabel "Query latency (ms)"
 """
@@ -34,8 +40,8 @@ box       = true
 
 [fixed]
 sf      = "100"
-workers = 4
-conns   = 64
+workers = 8
+conns   = 32
 threads = 256
 
 [env]
