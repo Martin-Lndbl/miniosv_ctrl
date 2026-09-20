@@ -22,8 +22,14 @@ import pandas as pd
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-PARTS = [("S3 first byte", "#c0504d"), ("wire transfer", "#e8a33d"),
-         ("stack + client", "#2e7d32"), ("DuckDB, no request outstanding", "#4472c4")]
+# The first two are what the miniOSv arm measures of a request's life: the
+# wait from sending the request until S3's first response byte, and the time
+# the body takes on the wire. Linux does not report either, so its bars carry
+# the miniOSv values for the same query; the legend says so.
+PARTS = [("waiting on S3 for the first byte (Linux: miniOSv's value)", "#c0504d"),
+         ("body on the wire (Linux: miniOSv's value)", "#e8a33d"),
+         ("network stack + HTTP client", "#2e7d32"),
+         ("DuckDB, no request outstanding", "#4472c4")]
 
 
 def median_run(g: pd.DataFrame, wall: str) -> pd.Series:
@@ -93,7 +99,7 @@ def main() -> int:
     ax.set_ylabel("Query wall time (ms)")
     ax.set_title(a.title or f"{a.csv.stem}: where the wall time goes (median run)", fontsize=10)
     ax.grid(axis="y", alpha=0.3)
-    fig.legend(fontsize=8, loc="lower center", ncol=4, frameon=False)
+    fig.legend(fontsize=8, loc="lower center", ncol=2, frameon=False)
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     out = a.out or a.csv.with_name(a.csv.stem + "-breakdown.png")
     fig.savefig(out, dpi=150)
