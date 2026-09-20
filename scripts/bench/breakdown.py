@@ -22,6 +22,8 @@ import pandas as pd
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.legend_handler import HandlerTuple  # noqa: E402
+from matplotlib.patches import Patch, Polygon, Rectangle  # noqa: E402
 
 # The coloured bands are not stopwatch readings of the query. They are the
 # span of wall time with at least one request outstanding, split in the
@@ -41,7 +43,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 PARTS = [("S3 turnaround (worker pick-up to response headers in)", "#c0504d"),
          ("body on the wire", "#e8a33d"),
          ("network stack + HTTP client", "#2e7d32"),
-         ("Linux: whole request life (DuckDB HTTP log)", "#8064a2"),
+         ("Linux: whole request life (DuckDB HTTP log), split unknown", "stripes"),
          ("DuckDB, no request outstanding", "#4472c4")]
 METHOD = ("Bars: the median run's wall time; the number on top is an average request's life. Coloured bands: "
           "the span with at least one request outstanding, split by how an average request's life divides "
@@ -109,12 +111,39 @@ def main() -> int:
     fig, ax = plt.subplots(figsize=(1.1 * len(bars) + 3, 4.8))
     xs = [b[0] for b in bars]
     bottom = [0.0] * len(bars)
+    striped = []  # Linux request-life bands: (x, bottom, height)
+    handles, labels = [], []
     for k, (label, color) in enumerate(PARTS):
         vals = [b[2][k] for b in bars]
-        ax.bar(xs, vals, bottom=bottom, color=color, label=label if any(vals) else None, width=0.8)
+        if color == "stripes":
+            striped += [(x, b, v) for x, b, v in zip(xs, bottom, vals) if v > 0]
+            if striped:
+                handles.append(tuple(Patch(facecolor=c) for _, c in PARTS[:3]))
+                labels.append(label)
+        else:
+            ax.bar(xs, vals, bottom=bottom, color=color, width=0.8)
+            if any(vals):
+                handles.append(Patch(facecolor=color))
+                labels.append(label)
         bottom = [b + v for b, v in zip(bottom, vals)]
+    # The three miniOSv phases as diagonal stripes: the Linux band is made of
+    # the same things, in proportions the log cannot tell.
+    ymax = max(bottom) * 1.08
+    step, rise = ymax * 0.015, ymax * 0.06
+    for x, b, h in striped:
+        clip = Rectangle((x - 0.4, b), 0.8, h, facecolor="none", edgecolor="none")
+        ax.add_patch(clip)
+        i = int((b - rise) // step)
+        while i * step < b + h:
+            y = i * step
+            poly = Polygon([(x - 0.4, y), (x + 0.4, y + rise), (x + 0.4, y + step + rise), (x - 0.4, y + step)],
+                           closed=True, facecolor=PARTS[i % 3][1], edgecolor="none")
+            ax.add_patch(poly)
+            poly.set_clip_path(clip)  # after add_patch, which resets the clip to the axes
+            i += 1
     for (x, _, _, note), top in zip(bars, bottom):
         ax.text(x, top, note, ha="center", va="bottom", fontsize=7)
+    ax.set_ylim(0, ymax)
     ax.set_xticks(xs, [b[1] for b in bars], fontsize=8)
     ax.set_ylabel("Query wall time (ms)")
     ax.set_title(a.title or f"{a.csv.stem}: where the wall time goes (median run)", fontsize=10)
@@ -124,9 +153,10 @@ def main() -> int:
     note_h = 0.022 * (note.count("\n") + 1)  # figure fraction per 7 pt line, roughly
     fig.text(0.5, 0.005, note, ha="center", va="bottom", fontsize=7, color="#555555")
     ncol = 5 if width_in >= 18 else 3 if width_in >= 11 else 1
-    shown = sum(1 for k in range(len(PARTS)) if any(b[2][k] for b in bars))
+    shown = len(handles)
     rows = -(-shown // ncol)
-    fig.legend(fontsize=8, loc="lower center", ncol=ncol, frameon=False, bbox_to_anchor=(0.5, note_h + 0.015))
+    fig.legend(handles, labels, fontsize=8, loc="lower center", ncol=ncol, frameon=False,
+               bbox_to_anchor=(0.5, note_h + 0.015), handler_map={tuple: HandlerTuple(ndivide=3, pad=0)})
     fig.tight_layout(rect=(0, note_h + 0.03 + 0.035 * rows, 1, 1))
     out = a.out or a.csv.with_name(a.csv.stem + "-breakdown.png")
     fig.savefig(out, dpi=150)
