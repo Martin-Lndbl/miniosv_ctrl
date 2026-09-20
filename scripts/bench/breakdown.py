@@ -14,6 +14,7 @@ it is taken from the miniOSv arm's measurement of the same query, so the
 remainder is what Linux's stack and client add.
 """
 import argparse
+import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -22,14 +23,22 @@ import pandas as pd
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-# The first two are what the miniOSv arm measures of a request's life: the
-# wait from sending the request until S3's first response byte, and the time
-# the body takes on the wire. Linux does not report either, so its bars carry
-# the miniOSv values for the same query; the legend says so.
-PARTS = [("waiting on S3 for the first byte (Linux: miniOSv's value)", "#c0504d"),
-         ("body on the wire (Linux: miniOSv's value)", "#e8a33d"),
+# The coloured bands are not stopwatch readings of the query. They are the
+# span of wall time with at least one request outstanding, split in the
+# proportions of an average request's life: its wait from sending the request
+# until S3's first response byte, its body's time on the wire, and the rest
+# (queueing for a connection, wake-up, parsing). Each request is timed on its
+# own and averaged over the query. Linux reports only a request's total life,
+# so its first two bands carry the miniOSv averages for the same query and only
+# the third is its own. The figure states this under the legend.
+PARTS = [("S3: request sent to first response byte", "#c0504d"),
+         ("body on the wire", "#e8a33d"),
          ("network stack + HTTP client", "#2e7d32"),
          ("DuckDB, no request outstanding", "#4472c4")]
+METHOD = ("Bars: the median run's wall time. Coloured bands: the span with at least one request outstanding, "
+          "split by how an average request's life divides (each request timed on its own, averaged over the "
+          "query). Linux reports only a request's total life: its first two bands are the miniOSv averages for "
+          "the same query.")
 
 
 def median_run(g: pd.DataFrame, wall: str) -> pd.Series:
@@ -99,8 +108,13 @@ def main() -> int:
     ax.set_ylabel("Query wall time (ms)")
     ax.set_title(a.title or f"{a.csv.stem}: where the wall time goes (median run)", fontsize=10)
     ax.grid(axis="y", alpha=0.3)
-    fig.legend(fontsize=8, loc="lower center", ncol=2, frameon=False)
-    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    width_in = fig.get_size_inches()[0]
+    note = textwrap.fill(METHOD, int(width_in * 13))
+    note_h = 0.022 * (note.count("\n") + 1)  # figure fraction per 7 pt line, roughly
+    fig.text(0.5, 0.005, note, ha="center", va="bottom", fontsize=7, color="#555555")
+    fig.legend(fontsize=8, loc="lower center", ncol=4 if width_in >= 14 else 2, frameon=False,
+               bbox_to_anchor=(0.5, note_h + 0.015))
+    fig.tight_layout(rect=(0, note_h + 0.09, 1, 1))
     out = a.out or a.csv.with_name(a.csv.stem + "-breakdown.png")
     fig.savefig(out, dpi=150)
     print(out.resolve())
