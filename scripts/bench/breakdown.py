@@ -25,13 +25,18 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 # The coloured bands are not stopwatch readings of the query. They are the
 # span of wall time with at least one request outstanding, split in the
-# proportions of an average request's life: its wait from sending the request
-# until S3's first response byte, its body's time on the wire, and the rest
-# (queueing for a connection, wake-up, parsing). Each request is timed on its
-# own and averaged over the query. Linux reports only a request's total life,
+# proportions of an average request's life, as the worker stamps it:
+#   turnaround  from the worker picking the request up (reusing a socket or
+#               dialing one, sending the head) until the response's HTTP
+#               headers are parsed: mostly S3's own latency, plus the round
+#               trips and, on a fresh socket, the TCP and TLS handshakes;
+#   body        from the headers until the last body byte lands;
+#   the rest    waiting for a free worker slot before pick-up, and the
+#               wake-up of the DuckDB thread after.
+# Each request is timed on its own and averaged over the query. Linux reports only a request's total life,
 # so its first two bands carry the miniOSv averages for the same query and only
 # the third is its own. The figure states this under the legend.
-PARTS = [("S3: request sent to first response byte", "#c0504d"),
+PARTS = [("S3 turnaround: request handed to the worker until the response headers are in", "#c0504d"),
          ("body on the wire", "#e8a33d"),
          ("network stack + HTTP client", "#2e7d32"),
          ("DuckDB, no request outstanding", "#4472c4")]
