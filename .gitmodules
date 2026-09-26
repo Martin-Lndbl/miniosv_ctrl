@@ -4,3 +4,6 @@
 [submodule "apps"]
 	path = apps
 	url = git@github.com:Martin-Lndbl/miniosv_apps.git
+[submodule "competitors/anyblob/AnyBlob"]
+	path = competitors/anyblob/AnyBlob
+	url = https://github.com/durner/AnyBlob

@@ -3,6 +3,8 @@
 
     just queue miniosv-sf10-query linux-sf10-query-parity               # one after the other
     just queue miniosv-sf10-query linux-sf10-query-parity --interleave  # rep-major across them
+    just queue miniosv-tls-100g anyblob-tls-100g --concurrent           # both arms at once, point by point
+    just queue a,b c,d --concurrent      # group a,b first (a and b side by side), then group c,d
     just queue miniosv-tls-100g --reps 1 --ttl 90m --dry-run            # the checks, no runner
     just queue-status
     just queue-stop
@@ -11,7 +13,9 @@ Every check runs before anything detaches: credentials, the bucket's region,
 the subnet and its S3 gateway endpoint, each experiment's plan, the blob the
 S3 benches read, no queue already running, no instance of ours already up.
 Then a runner starts in its own session and outlives this shell. It runs the
-experiments with `--market spot`, waits ten minutes and tries again whenever
+experiments with `--market spot` (interleaved, or with --concurrent every arm
+of a point on its own instance at the same time, so the arms of a comparison
+see the same minute of S3 rather than the same hour), waits ten minutes and tries again whenever
 no zone has a spot instance, and stops itself at the TTL (five hours unless
 told otherwise, six at most): it ends the experiment it is in, terminates
 every instance of ours launched since the queue began, and deregisters the
@@ -45,7 +49,7 @@ QUEUES = ROOT / "results" / "queue"
 LATEST = QUEUES / "latest"
 # Name tags of everything the drivers launch; aws-deploy.py names its images
 # and instances miniosv-<image>-<time>.
-OUR_TAGS = ["miniosv-*", "linux-s3-bench", "duckdb-linux-bench"]
+OUR_TAGS = ["miniosv-*", "linux-s3-bench", "duckdb-linux-bench", "anyblob-bench", "duckdb-anyblob-bench"]
 TTL_DEFAULT = 5 * 3600
 TTL_MAX = 6 * 3600
 SPOT_REFUSED = "spot requested but not provided"
@@ -145,7 +149,7 @@ def checks(a, xs: list[dict]) -> None:
         print(f"experiment : {experiment.qualified(x['path'])}")
         if x.get("deploy") or x.get("prep"):
             raise SystemExit(f"{experiment.qualified(x['path'])} is not a sweep; the queue runs sweeps only")
-        if Path(x["bench"]).name in ("smoltcp-s3", "linux-s3"):
+        if Path(x["bench"]).name in ("smoltcp-s3", "linux-s3", "anyblob"):
             try:
                 s3.head_object(Bucket=os.environ["AWS_BUCKET"], Key="blob.bin")
             except ClientError as e:
@@ -167,6 +171,17 @@ def checks(a, xs: list[dict]) -> None:
         raise SystemExit(f"instances of ours are already up: {names}; a queue would share the build tree and the bucket with them")
     if a.ttl > TTL_MAX:
         raise SystemExit(f"--ttl {a.ttl}s is over the {TTL_MAX // 3600} h a queue may live")
+    if a.concurrent:
+        groups: dict = {}
+        for x in xs:
+            groups.setdefault(x["group"], []).append(x)
+        for g in groups.values():
+            benches = [x["bench"] for x in g]
+            if len(set(benches)) != len(benches):
+                raise SystemExit("--concurrent runs a group's experiments side by side, and two on one bench would build into the same tree")
+        most = max(sum(runner.vcpus(x["instance"]) for x in g) for g in groups.values())
+        print(f"concurrent : {len(groups)} group(s), up to {max(len(g) for g in groups.values())} instances at once, "
+              f"{most} vCPUs (spot quota permitting)")
     print(f"ttl        : {a.ttl // 60} min, retry every {a.retry_wait // 60} min while spot is refused")
 
 
@@ -178,7 +193,13 @@ def submit(a) -> int:
     if "AWS_PROFILE" not in os.environ:
         print("WARN: no AWS profile: the runner will use whatever credentials this shell has, "
               "and an `aws login` session ends after a few hours", flush=True)
-    xs = [experiment.load(n) for n in a.experiments]
+    # "a,b" is one group: its members run side by side under --concurrent
+    # (or alternate under --interleave), and groups run one after another.
+    groups = [[experiment.load(n) for n in arg.split(",") if n] for arg in a.experiments]
+    xs = [x for g in groups for x in g]
+    for gi, g in enumerate(groups):
+        for x in g:
+            x["group"] = gi
     checks(a, xs)
     if a.dry_run:
         print("dry run: checks passed, nothing queued")
@@ -196,11 +217,13 @@ def submit(a) -> int:
         "deadline": now() + a.ttl,
         "market": a.market,
         "profile": os.environ.get("AWS_PROFILE"),
-        "interleave": a.interleave,
+        "interleave": a.interleave or a.concurrent,
+        "concurrent": a.concurrent,
         "reps": a.reps,
         "retry_wait_s": a.retry_wait,
         "experiments": [
             {"name": experiment.qualified(x["path"]), "path": str(x["path"]), "status": "queued",
+             "group": x["group"],
              "reps": a.reps or x["reps"], "attempts": 0, "spot_refusals": 0, "last": None,
              # The axis and its values, so an interleaved queue can run the
              # arms one point at a time: Q01 on both, then Q02 on both.
@@ -235,7 +258,9 @@ class Runner:
     def __init__(self, qdir: Path):
         self.qdir = qdir
         self.state = json.loads((qdir / "state.json").read_text())
-        self.child: subprocess.Popen | None = None
+        # One child per experiment in flight: sequential queues have one,
+        # concurrent ones as many as there are arms.
+        self.children: dict[str, subprocess.Popen] = {}
         self.stopping = False
         self.lock = threading.Lock()
 
@@ -256,13 +281,16 @@ class Runner:
     def deadline(self) -> float:
         return self.state["deadline"]
 
-    def run_one(self, x: dict, reps: int, plot: bool, only: str | None = None) -> str:
+    def run_one(self, x: dict, reps: int, plot: bool, only: str | None = None,
+                target_ip: str | None = None) -> str:
         """Run one experiment to `reps`, or just the point `only` (axis=value),
         retrying while spot is refused. Returns done | failed | expired | stopped."""
         cmd = [sys.executable, str(ROOT / "scripts/bench/experiment.py"), x["path"],
                "--reps", str(reps), "--market", self.state["market"]]
         if only:
             cmd += ["--only", only]
+        if target_ip:
+            cmd += ["--target-ip", target_ip]
         if not plot:
             cmd.append("--no-plot")
         log = self.qdir / (Path(x["path"]).stem + ".log")
@@ -277,16 +305,19 @@ class Runner:
             with log.open("a") as fh:
                 fh.write(f"\n===== {stamp()} {x['name']} --reps {reps} attempt {x['attempts']} =====\n")
                 fh.flush()
-                self.child = subprocess.Popen(cmd, cwd=ROOT, stdin=subprocess.DEVNULL,
-                                              stdout=fh, stderr=subprocess.STDOUT,
-                                              start_new_session=True, env=os.environ)
-                while self.child.poll() is None:
+                child = subprocess.Popen(cmd, cwd=ROOT, stdin=subprocess.DEVNULL,
+                                         stdout=fh, stderr=subprocess.STDOUT,
+                                         start_new_session=True, env=os.environ)
+                with self.lock:
+                    self.children[x["name"]] = child
+                while child.poll() is None:
                     if self.stopping or now() >= self.deadline():
                         self.end_child()
                         return "stopped" if self.stopping else "expired"
                     time.sleep(5)
-            rc = self.child.returncode
-            self.child = None
+            rc = child.returncode
+            with self.lock:
+                self.children.pop(x["name"], None)
             if rc == 0:
                 x["status"] = "done"
                 return "done"
@@ -309,32 +340,37 @@ class Runner:
             return "failed"
 
     def end_child(self) -> None:
-        """The experiment, its driver, and the deploy it may have running.
-        aws-deploy.py tears its own instance, image and snapshot down on
-        SIGINT, so it gets that first and 90 s to do it."""
-        if not self.child:
+        """Every experiment in flight, its driver, and the deploy it may have
+        running. aws-deploy.py tears its own instance, image and snapshot down
+        on SIGINT, so it gets that first and 90 s to do it."""
+        with self.lock:
+            children = list(self.children.values())
+            self.children.clear()
+        if not children:
             return
-        pids = descendants(self.child.pid)
-        deploys = [p for p, cmd in pids if "aws-deploy.py" in cmd]
-        for p in deploys:
-            try:
-                os.killpg(os.getpgid(p), signal.SIGINT)
-            except (ProcessLookupError, PermissionError):
-                pass
-        for p, _ in pids:
-            if p not in deploys:
+        deploys = []
+        for child in children:
+            pids = descendants(child.pid)
+            mine = [p for p, cmd in pids if "aws-deploy.py" in cmd]
+            deploys += mine
+            for p in mine:
                 try:
-                    os.kill(p, signal.SIGTERM)
+                    os.killpg(os.getpgid(p), signal.SIGINT)
                 except (ProcessLookupError, PermissionError):
                     pass
-        try:
-            os.killpg(os.getpgid(self.child.pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
+            for p, _ in pids:
+                if p not in mine:
+                    try:
+                        os.kill(p, signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+            try:
+                os.killpg(os.getpgid(child.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
         end = now() + 90
         while now() < end and any(alive(p) for p in deploys):
             time.sleep(2)
-        self.child = None
 
     def sweep(self) -> None:
         """Whatever of ours is still up from this queue's window."""
@@ -362,6 +398,63 @@ class Runner:
         except (BotoCoreError, ClientError) as e:
             self.event(f"WARN: sweep failed: {e}; check the console for instances tagged {OUR_TAGS}")
 
+    def run_group(self, members: list[dict], concurrent: bool) -> str:
+        """Every member's i-th point before any member's (i+1)-th, rep by rep;
+        with `concurrent`, the members' i-th points at the same time, each on
+        its own instance. Returns done | expired | stopped | credentials."""
+        most = max(x["reps"] for x in members)
+        longest = max(len(x["values"]) for x in members)
+        for k in range(1, most + 1):
+            for i in range(longest):
+                due = [x for x in members
+                       if x["status"] != "failed" and k <= x["reps"] and i < len(x["values"])]
+                if not due:
+                    continue
+                # One S3 front-end per point, for every arm: they do not
+                # perform alike, and each experiment would otherwise resolve
+                # its own.
+                try:
+                    ip = runner.target_ip()
+                except SystemExit as e:
+                    self.event(f"WARN: {e}; each arm resolves its own front-end")
+                    ip = None
+                verdict = "done"
+                if concurrent:
+                    results: dict[str, str] = {}
+
+                    def go(x, only):
+                        results[x["name"]] = self.run_one(x, k, plot=False, only=only, target_ip=ip)
+
+                    threads = []
+                    for x in due:
+                        only = f"{x['axis']}={x['values'][i]}"
+                        self.event(f"{x['name']} {only} rep {k} (concurrent)")
+                        t = threading.Thread(target=go, args=(x, only), daemon=True)
+                        t.start()
+                        threads.append(t)
+                        time.sleep(20)  # builds and launches staggered, not stampeding
+                    for t in threads:
+                        t.join()
+                    for x in due:
+                        v = results.get(x["name"], "failed")
+                        if v in ("expired", "stopped", "credentials"):
+                            verdict = v
+                        elif v == "failed":
+                            self.event(f"{x['name']} FAILED at {x['axis']}={x['values'][i]}; see its log")
+                else:
+                    for x in due:
+                        only = f"{x['axis']}={x['values'][i]}"
+                        self.event(f"{x['name']} {only} rep {k}")
+                        v = self.run_one(x, k, plot=False, only=only, target_ip=ip)
+                        if v in ("expired", "stopped", "credentials"):
+                            verdict = v
+                            break
+                        if v == "failed":
+                            self.event(f"{x['name']} FAILED at {only}; see its log")
+                if verdict != "done":
+                    return verdict
+        return "done"
+
     def main(self) -> int:
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, lambda *_: setattr(self, "stopping", True))
@@ -377,23 +470,14 @@ class Runner:
             # Rep-major, and within a rep point-major across the arms: the
             # i-th point of every experiment before the (i+1)-th of any, so a
             # comparison exists after the first point and drift lands on both.
-            most = max(x["reps"] for x in xs)
-            longest = max(len(x["values"]) for x in xs)
-            for k in range(1, most + 1):
-                for i in range(longest):
-                    for x in xs:
-                        if x["status"] == "failed" or k > x["reps"] or i >= len(x["values"]):
-                            continue
-                        only = f"{x['axis']}={x['values'][i]}"
-                        self.event(f"{x['name']} {only} rep {k}")
-                        v = self.run_one(x, k, plot=False, only=only)
-                        if v in ("expired", "stopped", "credentials"):
-                            verdict = v
-                            break
-                        if v == "failed":
-                            self.event(f"{x['name']} FAILED at {only}; see its log")
-                    if verdict != "done":
-                        break
+            # Groups (a,b c,d on the command line) run one after another.
+            groups: dict = {}
+            for x in xs:
+                groups.setdefault(x.get("group", 0), []).append(x)
+            for gi, members in sorted(groups.items()):
+                if len(groups) > 1:
+                    self.event(f"group {gi + 1}/{len(groups)}: {', '.join(x['name'] for x in members)}")
+                verdict = self.run_group(members, bool(self.state.get("concurrent")))
                 if verdict != "done":
                     break
             if verdict == "done":
@@ -472,7 +556,7 @@ def status(_a) -> int:
     live = alive(int(s.get("pid") or 0))
     print(f"queue {s['id']}: {s['status']}{'' if live else ' (runner gone)'}, pid {s.get('pid')}")
     print(f"  started {stamp(s['started'])}, deadline {stamp(s['deadline'])}, market {s['market']}, "
-          f"{'interleaved' if s['interleave'] else 'sequential'}")
+          f"{'concurrent' if s.get('concurrent') else 'interleaved' if s['interleave'] else 'sequential'}")
     for x in s["experiments"]:
         extra = f", {x['spot_refusals']} spot refusal(s)" if x["spot_refusals"] else ""
         print(f"  {x['name']:40s} {x['status']:16s} attempts {x['attempts']}{extra}")
@@ -503,6 +587,9 @@ def main() -> int:
     s = sub.add_parser("submit", help="check, then detach a runner")
     s.add_argument("experiments", nargs="+")
     s.add_argument("--interleave", action="store_true", help="rep-major across the experiments, so drift lands on all")
+    s.add_argument("--concurrent", action="store_true",
+                   help="interleave, and run every experiment's i-th point at the same time on its own instance; "
+                        "the experiments must not share a build tree (one miniOSv arm at most)")
     s.add_argument("--reps", type=int, default=None, help="overrides every experiment's reps")
     s.add_argument("--ttl", type=duration, default=TTL_DEFAULT, help="how long the queue may live (default 5h, max 6h)")
     s.add_argument("--retry-wait", type=duration, default=600, help="between spot attempts (default 10m)")

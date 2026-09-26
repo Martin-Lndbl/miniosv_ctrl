@@ -113,6 +113,13 @@ def main() -> int:
         help="run just the points where KNOB has this value, e.g. query=3; "
         "how `just queue --interleave` alternates arms per point",
     )
+    ap.add_argument(
+        "--target-ip",
+        default=None,
+        metavar="ADDR",
+        help="the S3 front-end to use, over the experiment's own choice; the "
+        "queue resolves one per point so the arms of a comparison share it",
+    )
     runner.add_profile_arg(ap)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-plot", action="store_true")
@@ -168,10 +175,10 @@ def main() -> int:
 
     fixed = x.get("fixed", {})
     # Once per experiment: S3 front-ends do not perform alike.
-    ip = x.get("target_ip") or runner.target_ip()
+    ip = a.target_ip or x.get("target_ip") or runner.target_ip()
     print(
         f"target     : {ip}"
-        f"{' (pinned in the experiment)' if x.get('target_ip') else ' (resolved once)'}"
+        f"{' (given)' if a.target_ip else ' (pinned in the experiment)' if x.get('target_ip') else ' (resolved once)'}"
     )
 
     # Interleaved: one rep-major invocation per group of points that share

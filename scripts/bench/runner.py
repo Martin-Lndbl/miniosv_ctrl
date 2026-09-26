@@ -202,6 +202,16 @@ def ec2():
     return boto3.client("ec2", region_name=os.environ["AWS_REGION"])
 
 
+def vcpus(instance: str) -> int:
+    """From the size suffix; enough for a quota estimate."""
+    size = instance.rsplit(".", 1)[-1]
+    if size == "large":
+        return 2
+    if size == "xlarge":
+        return 4
+    return int(size.removesuffix("xlarge")) * 4
+
+
 def bucket_region() -> str:
     """Where AWS_BUCKET lives, in the region names everything else uses."""
     s3 = boto3.client("s3", region_name=os.environ["AWS_REGION"])
