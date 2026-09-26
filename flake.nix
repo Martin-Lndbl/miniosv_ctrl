@@ -40,6 +40,16 @@
           ))
         ];
 
+        # competitors/anyblob links AnyBlob and its dependencies statically,
+        # so one binary runs on a stock AL2023 AMI: nixpkgs strips the .a of
+        # liburing and jemalloc and builds OpenSSL shared-only by default.
+        opensslStatic = pkgs.openssl.override { static = true; };
+        liburingStatic = pkgs.liburing.overrideAttrs (_: {
+          postInstall = "";
+          outputs = [ "out" "dev" "man" ];
+        });
+        jemallocStatic = pkgs.jemalloc.overrideAttrs (_: { dontDisableStatic = true; });
+
         extend =
           shell:
           shell.overrideAttrs (old: {
@@ -48,6 +58,13 @@
             shellHook = (old.shellHook or "") + ''
               # competitors/linux-s3 links statically, so it runs on a AL2023 AMI.
               export GLIBC_STATIC_LIB="${pkgs.glibc.static}/lib"
+              # competitors/anyblob: static archives and headers for its build.
+              export OPENSSL_STATIC_DIR="${opensslStatic.out}"
+              export OPENSSL_STATIC_DEV="${pkgs.lib.getDev opensslStatic}"
+              export LIBURING_STATIC_DIR="${liburingStatic.out}"
+              export LIBURING_STATIC_DEV="${pkgs.lib.getDev liburingStatic}"
+              export JEMALLOC_STATIC_DIR="${jemallocStatic.out}"
+              export JEMALLOC_STATIC_DEV="${pkgs.lib.getDev jemallocStatic}"
 
               if [ -f "$PWD/.env" ]; then
                 set -a

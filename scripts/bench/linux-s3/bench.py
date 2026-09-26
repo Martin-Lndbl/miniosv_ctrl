@@ -39,6 +39,9 @@ USER_DATA_MAX = 16 * 1024
 class LinuxS3(Bench):
     name = "linux-s3"
     os_name = "linux"
+    # A subclass on the same launch path (competitors/anyblob) swaps these.
+    bench_path = BENCH
+    scripts_dir = SCRIPTS
     knobs = {
         "workers": ("BENCH_WORKERS", size),
         "conns": ("BENCH_CONNS_PER_WORKER", size),
@@ -81,7 +84,7 @@ class LinuxS3(Bench):
             print("    binary already built this sweep (knobs are runtime here)")
             return
         r = subprocess.run(
-            ["just", "setup", BENCH], cwd=ROOT, capture_output=True, text=True
+            ["just", "setup", self.bench_path], cwd=ROOT, capture_output=True, text=True
         )
         if r.returncode:
             raise SystemExit(f"setup/build failed:\n{r.stdout}\n{r.stderr}")
@@ -113,7 +116,7 @@ class LinuxS3(Bench):
             "MODE": str(cfg["mode"]),
             "RUN_ID": run_id,
         }
-        body = (SCRIPTS / "instance.py").read_text()
+        body = (self.scripts_dir / "instance.py").read_text()
         # Drop instance.py's own shebang; the one at the top wins.
         body = body.split("\n", 1)[1] if body.startswith("#!") else body
         return "#!/usr/bin/env python3\nCONFIG = {}\n{}".format(json.dumps(conf), body)
@@ -133,7 +136,7 @@ class LinuxS3(Bench):
 
     def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
         logdir.mkdir(parents=True, exist_ok=True)
-        run_id = f"{instance}-{cfg['mode']}-{int(time.time())}"
+        run_id = f"{instance}-{cfg.get('mode', self.name)}-{int(time.time())}"
         log = logdir / f"run-{run_id}.log"
         # Same tag, different owner: report, never touch.
         if up := self.live():
@@ -155,7 +158,7 @@ class LinuxS3(Bench):
                     "ResourceType": "instance",
                     "Tags": [
                         {"Key": "Name", "Value": self.instance_tag},
-                        {"Key": "bench", "Value": "linux-s3"},
+                        {"Key": "bench", "Value": self.name},
                     ],
                 }
             ],
@@ -188,6 +191,9 @@ class LinuxS3(Bench):
         log.write_text(text)
 
         row = parse(text, self.metrics)
+        # From the launch, not the console: the shared patterns read these off
+        # the miniOSv deploy's output, which this path never sees.
+        row["market"], row["zone"] = market, zone
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["instance_id"] = iid
         row["log"] = log.name

@@ -1,0 +1,89 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# The root .env, shared with apps/bench/smoltcp-s3: same bucket, same blob,
+# same BENCH_* shape, so the rows are comparable.
+common := justfile_directory() / "../../scripts/bench-setup.sh"
+
+# Where the static binary lands in the bucket; instance.py fetches it unsigned.
+bin_key := "bin/anyblob-s3"
+build_dir := justfile_directory() / "build"
+
+# List available recipes
+default:
+    @just --list
+
+# Build the static binary and upload it; the bin/* grant already covers it
+setup: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    bench_env_load
+    bench_env_require AWS_SUBNET AWS_BUCKET_SIZE
+    bench_login
+    echo "uploading $(stat -c %s "{{ build_dir }}/anyblob-s3") bytes to s3://$AWS_BUCKET/{{ bin_key }}"
+    aws s3 cp "{{ build_dir }}/anyblob-s3" "s3://$AWS_BUCKET/{{ bin_key }}" --only-show-errors
+    just --justfile "{{ justfile() }}" --working-directory "{{ justfile_directory() }}" _policy add
+
+# Add or remove the bin/* bucket-policy statement (shared with linux-s3, by Sid)
+_policy action:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    bench_env_load
+    bench_policy "{{ action }}" BenchBinFromVpce "arn:aws:s3:::$AWS_BUCKET/bin/*"
+
+# Build AnyBlob and the harness as one static binary for a stock AL2023 AMI
+build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # From the devshell (flake.nix): static OpenSSL, liburing, jemalloc and
+    # glibc. AnyBlob's own CMake insists on lld and links jemalloc by name.
+    : "${GLIBC_STATIC_LIB:?not in the devshell -- run 'nix develop .#rust' first}"
+    : "${OPENSSL_STATIC_DIR:?devshell predates the anyblob arm -- re-enter 'nix develop .#rust'}"
+    [ -f "{{ justfile_directory() }}/AnyBlob/CMakeLists.txt" ] \
+        || git -C "{{ justfile_directory() }}" clone --recursive https://github.com/durner/AnyBlob AnyBlob
+    cmake -S "{{ justfile_directory() }}" -B "{{ build_dir }}" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc \
+        -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -isystem $LIBURING_STATIC_DEV/include -isystem $JEMALLOC_STATIC_DEV/include" \
+        -DOPENSSL_ROOT_DIR="$OPENSSL_STATIC_DIR" -DOPENSSL_INCLUDE_DIR="$OPENSSL_STATIC_DEV/include" \
+        -DOPENSSL_USE_STATIC_LIBS=ON \
+        -DLIBURING_INCLUDE_DIR="$LIBURING_STATIC_DEV/include" -DLIBURING_LIBRARY="$LIBURING_STATIC_DIR/lib/liburing.a" \
+        -DCMAKE_EXE_LINKER_FLAGS="-static -L$GLIBC_STATIC_LIB -L$JEMALLOC_STATIC_DIR/lib -L$OPENSSL_STATIC_DIR/lib" \
+        -DCMAKE_LIBRARY_PATH="$JEMALLOC_STATIC_DIR/lib;$OPENSSL_STATIC_DIR/lib" \
+        > "{{ build_dir }}.cmake.log" 2>&1 || { cat "{{ build_dir }}.cmake.log"; exit 1; }
+    cmake --build "{{ build_dir }}" --target anyblob-s3 -j "$(nproc)"
+    out="{{ build_dir }}/anyblob-s3"
+    file "$out" | grep -q 'statically linked' || { echo "not statically linked: $(file "$out")" >&2; exit 1; }
+    echo "built $out ($(stat -c %s "$out") bytes, static; AnyBlob $(git -C "{{ justfile_directory() }}/AnyBlob" rev-parse --short HEAD))"
+
+# Remove this bench's object and instances ('force' skips the prompt); the bin/* grant stays for linux-s3
+clean *force:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    [ -f "$BENCH_ENV" ] || { echo "nothing to clean up"; exit 0; }
+    bench_env_load
+    echo "about to delete:"
+    echo "  s3://$AWS_BUCKET/{{ bin_key }}"
+    echo "  any running instance tagged bench=anyblob"
+    if [ "{{ force }}" != "force" ]; then
+        if [ -t 0 ]; then
+            read -r -p "proceed? [y/N]: " answer || true
+            [ "${answer:-}" = "y" ] || { echo "aborted" >&2; exit 1; }
+        else
+            echo "refusing without a tty -- use 'just clean competitors/anyblob force'" >&2
+            exit 1
+        fi
+    fi
+    aws s3 rm "s3://$AWS_BUCKET/{{ bin_key }}" --only-show-errors || true
+    ids=$(aws ec2 describe-instances \
+        --filters "Name=tag:bench,Values=anyblob" \
+                  "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+        --query "Reservations[].Instances[].InstanceId" --output text)
+    if [ -n "$ids" ]; then
+        echo "terminating: $ids"
+        aws ec2 terminate-instances --instance-ids $ids --output text >/dev/null
+    else
+        echo "no instances tagged bench=anyblob"
+    fi

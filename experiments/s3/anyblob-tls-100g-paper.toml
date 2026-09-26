@@ -1,0 +1,56 @@
+name = "anyblob-tls-100g-paper"
+title = "AnyBlob at the paper's operating point vs ours: request size and thread count"
+description = """
+The paper reaches its throughput with 16 MiB requests, 10-14 threads and
+14-20 requests in flight per thread (Section 2.4 and scripts/throughput.py in
+its repository). This runs AnyBlob at that point and at the 128 MiB blocks
+the miniOSv experiment uses, over the same 192 GiB, and lets the resolver
+loose in one row to see what pinning costs it. Points co-vary, so [[points]].
+"""
+
+bench    = "competitors/anyblob"
+instance = "c6in.16xlarge"
+axis     = "block"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+[fixed]
+chunk = "64K"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "AnyBlob, {workers} thr x {conns} req, pin={pin}"
+
+# 12 x 16 = 192 in flight at 16 MiB: the paper's shape, 1024 blocks/thread = 192 GiB.
+[[points]]
+block   = "16M"
+workers = 12
+conns   = 16
+blocks  = 1024
+pin     = 1
+# Same, resolver free: what a user of the library gets.
+[[points]]
+block   = "16M"
+workers = 12
+conns   = 16
+blocks  = 1024
+pin     = 0
+# Our shape at 16 MiB blocks: 16 x 24 in flight, 768 blocks/thread = 192 GiB.
+[[points]]
+block   = "16M"
+workers = 16
+conns   = 24
+blocks  = 768
+pin     = 1
+# Our shape, resolver free.
+[[points]]
+block   = "128M"
+workers = 16
+conns   = 24
+blocks  = 96
+pin     = 0

@@ -1,0 +1,33 @@
+name = "anyblob-tls-100g"
+title = "TLS GET throughput on a 100 Gbps machine vs requests in flight per thread: AnyBlob"
+description = """
+The miniosv-tls-100g workload through AnyBlob (Durner, Leis, Neumann, VLDB
+2023), the io_uring download manager Umbra reads S3 with, on the stock AL2023
+kernel: 16 threads, each an AnyBlob daemon with N requests in flight, 96
+blocks of 128 MiB per thread from the same blob, same ranges, same
+front-end (pinned through /etc/hosts). Rows merge with miniosv-tls-100g's
+in one plot; run the two interleaved so S3 drift lands on both.
+"""
+
+bench    = "competitors/anyblob"
+instance = "c6in.16xlarge"
+axis     = "conns"
+grid     = { conns = [16, 24, 32] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900        # a stock AMI boots in ~60 s, then 192 GiB
+keep_going = true
+
+target_ip = ""
+
+[fixed]
+workers = 16
+block   = "128M"
+blocks  = 96
+chunk   = "64K"     # AnyBlob's default receive size
+pin     = 1
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "AnyBlob"
