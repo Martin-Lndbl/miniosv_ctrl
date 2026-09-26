@@ -1,0 +1,31 @@
+name = "miniosv-http-nopoollock-refill"
+title = "HTTP GET throughput with the minidpdk pool spinlock removed"
+description = """
+The refill variant of the pool-lock A/B (2026-09-26): every slot streams 16
+blocks of 128 MiB instead of one, so the run is ~55 s of steady state and the
+ramp and drain that dominate a one-block run stop deciding the aggregate. A
+SYN unanswered for 100 ms is re-dialled, as in miniosv-tls-100g. Same
+front-end as the one-block arms.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "conns"
+grid     = { conns = [16] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 400
+
+target_ip = "3.5.217.242"   # the front-end arm A resolved
+
+[fixed]
+workers = 8
+block   = "128M"
+blocks  = 16
+redial  = 100
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "miniOSv, no pool lock"

@@ -1,0 +1,29 @@
+name = "miniosv-http-nopoollock"
+title = "HTTP GET throughput with the minidpdk pool spinlock removed"
+description = """
+Arm B of the pool-lock question (2026-09-26): the same run as
+miniosv-http-poollock from a tree with the spinlock in minidpdk/stack.hh
+removed, on the front-end arm A resolved. Every queue has its own mbuf pool
+and one pinned worker touches it, so the lock guarded nothing; this is
+whether taking it out shows on the wire.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "conns"
+grid     = { conns = [16] }
+reps     = 5
+cooldown = 0
+max_vm_seconds = 240
+
+target_ip = "3.5.217.242"   # arm A resolved this front-end
+
+[fixed]
+workers = 8
+block   = "128M"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "miniOSv, no pool lock"

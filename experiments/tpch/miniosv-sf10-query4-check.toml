@@ -1,0 +1,33 @@
+name = "miniosv-sf10-query4-check"
+title = "DuckDB-on-miniOSv: the four suite queries at sf=10, 64 threads, one rep"
+description = """
+The threads=64 column of miniosv-sf10-query4, one rep, as a performance
+sanity check of the mininet branch before merging (2026-09-26). Compare
+against results/tpch/miniosv-sf10-query4.csv at duckdb_threads=64:
+Q01 943, Q06 1187, Q09 1972, Q18 1339 ms medians.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.8xlarge"
+axis     = "query"
+grid     = { threads = [64], query = [1, 6, 9, 18] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "10"
+workers = 2
+conns   = 64
+
+[env]
+BENCH_NOTE = "miniOSv"

@@ -1,0 +1,30 @@
+name = "miniosv-http-poollock"
+title = "HTTP GET throughput with the minidpdk pool spinlock in place"
+description = """
+Arm A of the pool-lock question (2026-09-26). Every queue has its own mbuf
+pool and one pinned worker, so the spinlock in minidpdk/stack.hh is one
+uncontended exchange per push or pop. Does removing it show on the wire?
+Plain HTTP so the stack, not rustls, is what is being timed. The other arm is
+miniosv-http-nopoollock, run right after on the same front-end from a tree
+with the lock removed.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "conns"
+grid     = { conns = [16] }
+reps     = 5
+cooldown = 0
+max_vm_seconds = 240
+
+target_ip = ""
+
+[fixed]
+workers = 8
+block   = "128M"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "miniOSv, pool lock"

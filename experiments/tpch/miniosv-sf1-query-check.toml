@@ -1,0 +1,34 @@
+name = "miniosv-sf1-query-check"
+title = "DuckDB-on-miniOSv: the checked sf=1 queries, one rep, as a merge gate"
+description = """
+The five sf=1 queries of miniosv-sf1-query, one rep each. At sf=1 the tpch
+extension ships the answers, so a run that returns wrong data fails rather
+than being timed. Run before merging the mininet branch (2026-09-26) after
+the srg_mainline merge and the review fixes; compare against
+results/tpch/miniosv-sf1-query.csv.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.2xlarge"
+axis     = "query"
+grid     = { query = [1, 3, 6, 10, 12] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 300
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "1"
+workers = 2
+conns   = 64
+
+[env]
+BENCH_NOTE = "miniOSv"
