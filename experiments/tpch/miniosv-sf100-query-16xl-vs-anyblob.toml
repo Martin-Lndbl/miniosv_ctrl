@@ -1,0 +1,33 @@
+name = "miniosv-sf100-query-16xl-vs-anyblob"
+title = "DuckDB-on-miniOSv: all 22 TPC-H queries at sf=100 on c6in.16xlarge, paired with the AnyBlob arm"
+description = """
+miniosv-sf100-query-16xl again, as the arm paired with anyblob-sf100-query-16xl:
+same knobs (8 workers x 32 connections, 256 DuckDB threads), a fresh CSV so
+every row here has a same-minute row on the other arm. Run the two with
+`just queue miniosv-sf100-query-16xl-vs-anyblob anyblob-sf100-query-16xl --concurrent`.
+"""
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.16xlarge"
+axis     = "query"
+grid     = { query = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+target_ip = ""
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "100"
+workers = 8
+conns   = 32
+threads = 256
+
+[env]
+BENCH_NOTE = "miniOSv"

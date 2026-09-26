@@ -220,6 +220,19 @@ BIN = os.path.join(WORK, "duckdb")
 EXT = os.path.join(WORK, "httpfs.duckdb_extension")
 DB = os.path.join(WORK, "tpch.duckdb")
 
+# Which binary, and whether httpfs is a file beside it or built into it. The
+# stock arm fetches the release CLI and its loadable extension from
+# bin/duckdb-linux; a competitor built from source (duckdb-anyblob) ships one
+# static binary with httpfs linked in, under its own prefix, and `LOAD httpfs`
+# then names the built-in one. Env vars named HTTPFS_* reach the binary: the
+# AnyBlob client reads its thread count and chunk size from them.
+BIN_PREFIX = cfg("BENCH_BIN_PREFIX", "bin/duckdb-linux")
+HTTPFS_BUILTIN = cfg("BENCH_HTTPFS_BUILTIN") == "1"
+LOAD_HTTPFS = "LOAD httpfs;" if HTTPFS_BUILTIN else "LOAD '{}';".format(EXT)
+for _k, _v in CONFIG.items():
+    if str(_k).startswith("HTTPFS_") and str(_v):
+        os.environ[str(_k)] = str(_v)
+
 TABLES = ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
 
 
@@ -295,14 +308,14 @@ def http_profile(qn):
     # down by doing it over a serial console. `enable_logging` last because
     # every SET between the two is itself a log record.
     prelude = (
-        "LOAD '{ext}'; "
+        "{ext} "
         "{threads}"
         "SET logging_storage='memory'; "
         "SET logging_level='debug'; "
         "SET logging_mode='ENABLE_SELECTED'; "
         "SET enabled_log_types='HTTP'; "
         "SET enable_logging=true; "
-    ).format(ext=EXT, threads=thread_setting())
+    ).format(ext=LOAD_HTTPFS, threads=thread_setting())
     sql = prelude + "PRAGMA tpch({});".format(qn) + HTTP_STATS_SQL.format(out=out)
     t0 = time.perf_counter()
     try:
@@ -391,7 +404,7 @@ def thread_setting():
 
 
 def setup_views():
-    stmts = ["LOAD '{}';".format(EXT)]
+    stmts = [LOAD_HTTPFS]
     for t in TABLES:
         stmts.append(
             "CREATE VIEW {t} AS SELECT * FROM "
@@ -405,8 +418,8 @@ def fetch_answers():
     # good, because INSTALL needs $HOME and cloud-init's scripts-user module
     # runs with it unset ("Can't find the home directory at ''").
     out = run_sql(
-        "LOAD '{}'; "
-        "SELECT query_nr, answer FROM tpch_answers() WHERE scale_factor = {};".format(EXT, SF)
+        "{} "
+        "SELECT query_nr, answer FROM tpch_answers() WHERE scale_factor = {};".format(LOAD_HTTPFS, SF)
     )
     return {r["query_nr"]: r["answer"] for r in json.loads(out)}
 
@@ -453,7 +466,7 @@ def main():
             SF, len(QUERIES), "y" if len(QUERIES) == 1 else "ies", BUCKET, SCHEME))
         tune_nic()
 
-        if not fetch(ENDPOINT + "/bin/duckdb-linux/duckdb", BIN):
+        if not fetch(ENDPOINT + "/" + BIN_PREFIX + "/duckdb", BIN):
             say("INCOMPLETE: duckdb binary unavailable")
             return 1
         os.chmod(BIN, 0o755)
@@ -463,7 +476,7 @@ def main():
         if CPU_PROBE:
             return cpu_probe()
 
-        if not fetch(ENDPOINT + "/bin/duckdb-linux/httpfs.duckdb_extension", EXT):
+        if not HTTPFS_BUILTIN and not fetch(ENDPOINT + "/" + BIN_PREFIX + "/httpfs.duckdb_extension", EXT):
             say("INCOMPLETE: httpfs extension unavailable")
             return 1
 
@@ -473,8 +486,8 @@ def main():
         for qn in QUERIES:
             t0 = time.perf_counter()
             try:
-                out = run_sql("LOAD '{}'; {}PRAGMA tpch({});".format(
-                    EXT, thread_setting(), qn))
+                out = run_sql("{} {}PRAGMA tpch({});".format(
+                    LOAD_HTTPFS, thread_setting(), qn))
                 rows = json.loads(out) if out.strip() else []
             except Exception as e:
                 say("Q{:02d}: FAIL 0.0 ms: {}".format(qn, e))

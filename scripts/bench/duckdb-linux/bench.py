@@ -59,6 +59,10 @@ USER_DATA_MAX = 16 * 1024
 class DuckdbLinux(Bench):
     name = "duckdb-linux"
     os_name = "linux"
+    # A competitor on the same launch path (duckdb-anyblob) swaps these and
+    # adds to the instance's CONFIG through extra_conf().
+    bench_path = BENCH
+    scripts_dir = SCRIPTS
     knobs = {
         "query": (None, int),
         "sf": (None, str),
@@ -167,7 +171,7 @@ class DuckdbLinux(Bench):
             print("    duckdb/httpfs already uploaded this sweep")
             return
         r = subprocess.run(
-            ["just", "setup", BENCH], cwd=ROOT, capture_output=True, text=True
+            ["just", "setup", self.bench_path], cwd=ROOT, capture_output=True, text=True
         )
         if r.returncode:
             raise SystemExit(f"setup failed:\n{r.stdout}\n{r.stderr}")
@@ -182,13 +186,22 @@ class DuckdbLinux(Bench):
         ssm = boto3.client("ssm", region_name=os.environ["AWS_REGION"])
         return ssm.get_parameter(Name=SSM_AMI)["Parameter"]["Value"]
 
-    def user_data(self, cfg: dict) -> str:
+    def extra_conf(self, cfg: dict) -> dict:
+        return {}
+
+    def user_data(self, cfg: dict, ip: str = "") -> str:
+        # pin="auto" is the address the sweep resolved for this point, the
+        # one the miniOSv image compiles in; an explicit address or "" (resolve
+        # normally) pass through.
+        pin = str(cfg.get("pin") or "")
+        if pin == "auto":
+            pin = ip
         conf = {
             "AWS_BUCKET": os.environ["AWS_BUCKET"],
             "AWS_REGION": os.environ["AWS_REGION"],
             "BENCH_SF": str(cfg["sf"]),
             "BENCH_QUERIES": str(cfg["query"]),
-            "BENCH_PIN_IP": str(cfg.get("pin") or ""),
+            "BENCH_PIN_IP": pin,
             "BENCH_GRO": str(cfg.get("gro") or ""),
             "BENCH_NIC_QUEUES": str(cfg.get("queues") or ""),
             "BENCH_HTTP_LOG": str(cfg.get("httplog") or ""),
@@ -196,12 +209,13 @@ class DuckdbLinux(Bench):
             "BENCH_THREADS": str(cfg.get("threads") or ""),
             "BENCH_SCHEME": str(cfg.get("scheme") or ""),
         }
-        body = (SCRIPTS / "instance.py").read_text()
+        conf.update(self.extra_conf(cfg))
+        body = (self.scripts_dir / "instance.py").read_text()
         body = body.split("\n", 1)[1] if body.startswith("#!") else body
         return "#!/usr/bin/env python3\nCONFIG = {}\n{}".format(json.dumps(conf), body)
 
-    def user_data_blob(self, cfg: dict) -> bytes:
-        raw = self.user_data(cfg).encode()
+    def user_data_blob(self, cfg: dict, ip: str = "") -> bytes:
+        raw = self.user_data(cfg, ip).encode()
         blob = gzip.compress(raw)
         if len(blob) > USER_DATA_MAX:
             raise SystemExit(
@@ -229,14 +243,14 @@ class DuckdbLinux(Bench):
             MinCount=1,
             MaxCount=1,
             SubnetId=os.environ["AWS_SUBNET"],
-            UserData=self.user_data_blob(cfg),
+            UserData=self.user_data_blob(cfg, ip),
             InstanceInitiatedShutdownBehavior="terminate",
             TagSpecifications=[
                 {
                     "ResourceType": "instance",
                     "Tags": [
                         {"Key": "Name", "Value": self.instance_tag},
-                        {"Key": "bench", "Value": "duckdb-linux"},
+                        {"Key": "bench", "Value": self.name},
                     ],
                 }
             ],
@@ -266,6 +280,7 @@ class DuckdbLinux(Bench):
 
         log.write_text(text)
         row = parse(text, self.metrics)
+        row["market"], row["zone"] = market, zone
         row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
         row["instance_id"] = iid
         row["log"] = log.name

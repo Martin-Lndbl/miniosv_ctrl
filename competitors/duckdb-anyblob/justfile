@@ -1,0 +1,82 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# The root .env, the login, the gateway endpoint and the bucket-policy grant
+# come from the shared setup; this bench adds one static binary under its own
+# prefix and reuses the TPC-H data apps/bench/duckdb-tpch put in the bucket.
+common := justfile_directory() / "../../scripts/bench-setup.sh"
+root := justfile_directory() / "../.."
+bin_prefix := "bin/duckdb-anyblob"
+build_dir := justfile_directory() / "build"
+
+# List available recipes
+default:
+    @just --list
+
+# Build the static DuckDB CLI with httpfs-over-AnyBlob, upload it, grant the prefix
+setup: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    bench_env_load
+    bench_login
+    echo "uploading $(stat -c %s "{{ build_dir }}/duckdb") bytes to s3://$AWS_BUCKET/{{ bin_prefix }}/duckdb"
+    aws s3 cp "{{ build_dir }}/duckdb" "s3://$AWS_BUCKET/{{ bin_prefix }}/duckdb" --only-show-errors
+    bench_grant DuckdbAnyblobBinFromVpce "arn:aws:s3:::$AWS_BUCKET/{{ bin_prefix }}/*"
+
+# Build DuckDB (apps/miniduckdb, the same tree the miniOSv arm runs) as one
+# static Linux binary: shell + tpch + parquet + httpfs with the AnyBlob client,
+# no curl. Static so it runs on a stock AL2023 AMI whose glibc is older than
+# the devshell's.
+build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${GLIBC_STATIC_LIB:?not in the devshell -- run 'nix develop .#rust' first}"
+    : "${OPENSSL_STATIC_DIR:?devshell predates the anyblob arm -- re-enter 'nix develop .#rust'}"
+    anyblob="{{ root }}/competitors/anyblob/AnyBlob"
+    [ -f "$anyblob/CMakeLists.txt" ] || git -C "{{ root }}/competitors/anyblob" clone --recursive https://github.com/durner/AnyBlob AnyBlob
+    cmake -S "{{ root }}/apps/miniduckdb" -B "{{ build_dir }}" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc \
+        -DBUILD_SHELL=1 -DBUILD_UNITTESTS=0 -DBUILD_BENCHMARKS=0 \
+        -DENABLE_EXTENSION_AUTOLOADING=0 -DENABLE_EXTENSION_AUTOINSTALL=0 \
+        -DDUCKDB_EXTENSION_CONFIGS="{{ justfile_directory() }}/extensions.cmake" \
+        -DSTATIC_LIBCPP=TRUE \
+        -DCMAKE_CXX_FLAGS="-isystem $LIBURING_STATIC_DEV/include -isystem $JEMALLOC_STATIC_DIR/include" \
+        -DCMAKE_EXE_LINKER_FLAGS="-static -L$GLIBC_STATIC_LIB -L$JEMALLOC_STATIC_DIR/lib -L$OPENSSL_STATIC_DIR/lib" \
+        -DHTTPFS_DISABLE_CURL=ON -DHTTPFS_ANYBLOB_DIR="$anyblob" \
+        -DOPENSSL_ROOT_DIR="$OPENSSL_STATIC_DIR" -DOPENSSL_INCLUDE_DIR="$OPENSSL_STATIC_DEV/include" -DOPENSSL_USE_STATIC_LIBS=ON \
+        -DLIBURING_INCLUDE_DIR="$LIBURING_STATIC_DEV/include" -DLIBURING_LIBRARY="$LIBURING_STATIC_DIR/lib/liburing.a" \
+        -DCMAKE_LIBRARY_PATH="$JEMALLOC_STATIC_DIR/lib;$OPENSSL_STATIC_DIR/lib" \
+        > "{{ build_dir }}.cmake.log" 2>&1 || { tail -40 "{{ build_dir }}.cmake.log"; exit 1; }
+    cmake --build "{{ build_dir }}" --target shell -j "$(nproc)"
+    out="{{ build_dir }}/duckdb"
+    file "$out" | grep -q 'statically linked' || { echo "not statically linked: $(file "$out")" >&2; exit 1; }
+    echo "built $out ($(stat -c %s "$out") bytes, static; duckdb $(git -C "{{ root }}/apps/miniduckdb" describe --tags --always), httpfs $(git -C "{{ root }}/apps/miniduckdb-httpfs" rev-parse --short HEAD), AnyBlob $(git -C "$anyblob" rev-parse --short HEAD))"
+
+# Remove this bench's object, its grant and its instances ('force' skips the prompt)
+clean *force:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    [ -f "$BENCH_ENV" ] || { echo "nothing to clean up"; exit 0; }
+    bench_env_load
+    echo "about to delete: s3://$AWS_BUCKET/{{ bin_prefix }}/, the DuckdbAnyblobBinFromVpce grant, instances tagged bench=duckdb-anyblob"
+    if [ "{{ force }}" != "force" ]; then
+        if [ -t 0 ]; then
+            read -r -p "proceed? [y/N]: " answer || true
+            [ "${answer:-}" = "y" ] || { echo "aborted" >&2; exit 1; }
+        else
+            echo "refusing without a tty -- use 'just clean competitors/duckdb-anyblob force'" >&2
+            exit 1
+        fi
+    fi
+    aws s3 rm "s3://$AWS_BUCKET/{{ bin_prefix }}/" --recursive --only-show-errors || true
+    bench_revoke DuckdbAnyblobBinFromVpce || true
+    ids=$(aws ec2 describe-instances \
+        --filters "Name=tag:bench,Values=duckdb-anyblob" \
+                  "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+        --query "Reservations[].Instances[].InstanceId" --output text)
+    if [ -n "$ids" ]; then
+        echo "terminating: $ids"
+        aws ec2 terminate-instances --instance-ids $ids --output text >/dev/null
+    fi
