@@ -1,0 +1,30 @@
+name = "miniosv-tls-cpubound-copy2"
+title = "TLS GET throughput, 1 and 2 workers, with the socket-ring copy removed (miniosv rx-copies, first commit)"
+description = """
+One arm of the RX-copy A/B; see miniosv-tls-cpubound-base for the design and
+the front-end every arm is pinned to.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "workers"
+reps     = 3
+cooldown = 0
+max_vm_seconds = 300
+
+target_ip = "3.5.217.123"   # the base arm's front-end
+
+[fixed]
+block = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_NOTE      = "miniOSv, ring decrypt (copy 2 out)"
+
+[[points]]
+workers = 1
+conns   = 128
+[[points]]
+workers = 2
+conns   = 64
