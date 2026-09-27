@@ -1,0 +1,33 @@
+name = "wrk-nginx"
+title = "wrk on Linux against a static nginx: the Linux arm of the HTTP load head-to-head"
+description = """
+wrk, the standard HTTP load generator, in the shape of the miniOSv arm
+(miniosv-nginx): 8 threads carrying 128 connections, 128 MiB ranged GETs at
+random block-aligned offsets of the same 10 GiB blob, Connection: close on
+every request, for 60 s against its own nginx launched the same way. Rows
+carry wrk's request rate and latency percentiles, the wire rate from the
+NIC counters, and the client cpu the run consumed, which is where the two
+stacks differ most.
+"""
+
+bench    = "competitors/wrk-http"
+instance = "c6in.8xlarge"
+axis     = "conns"
+grid     = { conns = [128] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 600
+
+target_ip = "server"
+
+[fixed]
+threads  = 8
+duration = 60
+block    = "128M"
+close    = "1"
+server   = "c6in.8xlarge"
+
+[env]
+AWS_BUCKET_SIZE = "10G"
+BENCH_ZONES     = "eu-north-1c,eu-north-1b,eu-north-1a"  # 1a refused every c6in.8xlarge spot request on 2026-09-27
+BENCH_NOTE      = "Linux, wrk"

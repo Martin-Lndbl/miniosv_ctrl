@@ -56,6 +56,7 @@ class LinuxS3(Bench):
     instance_tag = "linux-s3-bench"
     default_instance = "c6in.8xlarge"
     max_vm_seconds = 900  # mostly waiting for EC2 to expose the console
+    zone: str | None = None  # set by a bench that dials a server of its own
 
     # Shared lines live in runner.COMMON_METRICS; this stack does not steer by
     # RSS and nothing clamps its worker count, so requested == actual.
@@ -162,7 +163,7 @@ class LinuxS3(Bench):
                     ],
                 }
             ],
-        ), self.market)
+        ), self.market, zone=self.zone)
         iid = r["Instances"][0]["InstanceId"]
         print(f"  Instance running: {iid} ({instance}, {zone}, {market})", flush=True)
 

@@ -1,0 +1,40 @@
+name = "miniosv-nginx"
+title = "miniOSv against a static nginx: plain HTTP ranged GETs, a connection per block"
+description = """
+The miniOSv arm of the wrk head-to-head (2026-09-27): the first of the
+network-stack benchmarks, the one where the roles match, since mininet is an
+HTTP load generator and so is wrk. Each point launches its own nginx on the
+instance type `server` names (competitors/nginx-static: one static binary, a
+10 GiB blob in tmpfs, stock AL2023 otherwise); the image then dials it over
+plain HTTP with 8 workers x 16 connections, 128 MiB blocks, one connection per
+block, 256 blocks per worker so a run lasts about a minute at line rate. The
+other arm, wrk-nginx, is wrk on Linux with the same shape against its own
+identical server. Run them together:
+
+    just queue http/miniosv-nginx,http/wrk-nginx --concurrent
+    just plot results/http/miniosv-nginx.csv results/http/wrk-nginx.csv --series note
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "conns"
+grid     = { conns = [16] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 400
+
+# "server": the bench launches its own nginx and dials that, not S3.
+target_ip = "server"
+
+[fixed]
+workers = 8
+block   = "128M"
+blocks  = 256
+server  = "c6in.8xlarge"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_ZONES     = "eu-north-1c,eu-north-1b,eu-north-1a"  # 1a refused every c6in.8xlarge spot request on 2026-09-27
+BENCH_NOTE      = "miniOSv"

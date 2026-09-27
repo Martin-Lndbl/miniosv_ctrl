@@ -1,0 +1,36 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# The static file server the HTTP load benches dial: competitors/wrk-http and
+# apps/bench/smoltcp-s3 with server=<instance type>. Bench instances have no
+# package mirror, so the binary is built here with nix and fetched from the
+# bucket at boot, unsigned through the VPC endpoint like every bench binary.
+common := justfile_directory() / "../../scripts/bench-setup.sh"
+bin_prefix := "bin/nginx-static"
+
+# List available recipes
+default:
+    @just --list
+
+# Build the static nginx and upload it
+setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    bench_env_load
+    bench_login
+    out=$(mktemp -d)
+    trap 'rm -rf "$out"' EXIT
+    nix build --impure -f "{{ justfile_directory() }}/nginx.nix" -o "$out/result"
+    file -L "$out/result/bin/nginx" | grep -q 'statically linked'
+    aws s3 cp "$out/result/bin/nginx" "s3://$AWS_BUCKET/{{ bin_prefix }}/nginx" --only-show-errors
+    bench_grant NginxStaticFromVpce "arn:aws:s3:::$AWS_BUCKET/{{ bin_prefix }}/*"
+    echo "nginx-static ready: s3://$AWS_BUCKET/{{ bin_prefix }}/nginx ($("$out/result/bin/nginx" -v 2>&1))"
+
+# Remove the binary and its bucket-policy grant
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    bench_env_load
+    aws s3 rm "s3://$AWS_BUCKET/{{ bin_prefix }}/" --recursive
+    bench_revoke NginxStaticFromVpce

@@ -128,7 +128,7 @@ def spot_subnets(c, subnet_id: str | None) -> list[tuple[str | None, str]]:
     return [(subnet_id, desc["AvailabilityZone"])] + [(s["SubnetId"], s["AvailabilityZone"]) for s in rest]
 
 
-def launch(c, run_kwargs: dict, market: str = "on-demand") -> tuple[dict, str, str]:
+def launch(c, run_kwargs: dict, market: str = "on-demand", zone: str | None = None) -> tuple[dict, str, str]:
     """run_instances, on the market asked for; returns the response, the
     market used and the zone. Spot is a one-time request at the default max
     price (the on-demand rate), terminated if reclaimed; a run is minutes
@@ -137,8 +137,12 @@ def launch(c, run_kwargs: dict, market: str = "on-demand") -> tuple[dict, str, s
     provides one: a run that asked for spot and got on-demand would be
     billed at ten times what was expected. "spot-or-on-demand" then retries
     on-demand in the subnet given. Mirrors miniosv/scripts/aws-deploy.py,
-    which cannot import this."""
+    which cannot import this. `zone` pins the launch to one zone -- a client
+    beside the server it dials -- and a refusal there is the verdict."""
     zones = spot_subnets(c, run_kwargs.get("SubnetId"))
+    if zone:
+        zones = [z for z in zones if z[1] == zone]
+        run_kwargs = dict(run_kwargs, SubnetId=zones[0][0])
     if market == "on-demand":
         return c.run_instances(**run_kwargs), "on-demand", zones[0][1]
     spot = dict(
@@ -404,6 +408,7 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
 
     bench.max_vm_seconds = a.max_vm_seconds
     bench.market = a.market
+    bench.instance = a.instance  # the client's type; a server it dials ranks zones for it
 
     axis, _, raw = a.sweep.partition("=")
     if not raw:

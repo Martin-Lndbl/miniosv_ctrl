@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import runner  # noqa: E402
+from httpserver import HttpServer  # noqa: E402
 from runner import COMMON_METRICS, ROOT, Bench, ec2, parse, size  # noqa: E402
 
 BENCH = "apps/bench/smoltcp-s3"
@@ -39,10 +40,14 @@ class SmoltcpS3(Bench):
         "rxdesc": ("BENCH_RX_DESC", size),
         "blocks": ("BENCH_BLOCKS_PER_WORKER", size),
         "redial": ("BENCH_SYN_REDIAL_MS", size),
+        # An instance type: dial a static nginx of that type launched per point
+        # (competitors/nginx-static) instead of S3. The HTTP load head-to-head.
+        "server": ("BENCH_SERVER", str),
     }
-    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "rxdesc": 0, "blocks": 0, "redial": 0}
+    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "rxdesc": 0, "blocks": 0, "redial": 0, "server": ""}
     instance_tag = "miniosv-loader-*"
     default_instance = "c6in.8xlarge"  # 50 Gbps sustained; c7i.8xlarge caps at 12.5
+    server: HttpServer | None = None
     max_vm_seconds = 110
 
     # Shared lines live in runner.COMMON_METRICS; these are this stack's own.
@@ -65,6 +70,14 @@ class SmoltcpS3(Bench):
         """Bake this point's constants in; build.rs marks each knob
         rerun-if-env-changed so cargo rebuilds when one moves. Must run inside
         the devshell, whose `set -a; . .env` shellHook would otherwise win."""
+        if cfg.get("server"):
+            # Not S3: this point's own nginx, dialled by address like a front-end.
+            if self.server:
+                self.server.stop()
+            self.server = HttpServer(str(cfg["server"]), os.environ.get("BENCH_SERVER_MARKET", "on-demand"),
+                                                   ROOT / "results/http/logs", client=self.instance,
+                                     size=os.environ.get("AWS_BUCKET_SIZE", "10G"))
+            ip = self.server.start()
         env = {
             **os.environ,
             "AWS_TARGET_IP": ip,
@@ -80,7 +93,20 @@ class SmoltcpS3(Bench):
         if r.returncode:
             raise SystemExit(f"build failed for {cfg}:\n{r.stdout}\n{r.stderr}")
 
+    def valid(self, row: dict) -> bool:
+        # The setup_us_max gate catches the S3 front-end lottery; against our
+        # own nginx a retransmitted SYN among thousands of dials is just that.
+        return super().valid(dict(row, setup_us_max=0) if self.server else row)
+
     def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
+        if self.server:
+            ip = self.server.ip or ip
+        row = self._run_once(instance, logdir, cfg, ip)
+        if self.server:
+            row["server_id"], row["server_zone"], row["target_ip"] = self.server.iid, self.server.zone, self.server.ip
+        return row
+
+    def _run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
         """Deploy, wait for the guest's verdict, terminate, parse. Termination is
         an API call: a signal can resolve to the driver's own pgid and orphan a
         billing instance."""
@@ -93,7 +119,8 @@ class SmoltcpS3(Bench):
 
         with log.open("w") as fh:
             p = subprocess.Popen(
-                ["just", "deploy", instance, "--market", self.market],
+                ["just", "deploy", instance, "--market", self.market,
+                 *(["--zone", self.server.zone] if self.server else [])],
                 cwd=ROOT,
                 stdout=fh,
                 stderr=subprocess.STDOUT,

@@ -1,0 +1,36 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# wrk, the standard HTTP load generator, as the Linux arm of the HTTP load
+# comparison with apps/bench/smoltcp-s3: both dial the same static nginx
+# (competitors/nginx-static). The driver is scripts/bench/wrk-http/bench.py.
+common := justfile_directory() / "../../scripts/bench-setup.sh"
+bin_prefix := "bin/wrk-http"
+
+# List available recipes
+default:
+    @just --list
+
+# Build the static wrk, and upload it with the request script
+setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    bench_env_load
+    bench_login
+    out=$(mktemp -d)
+    trap 'rm -rf "$out"' EXIT
+    nix build --impure -f "{{ justfile_directory() }}/wrk.nix" -o "$out/result"
+    file -L "$out/result/bin/wrk" | grep -q 'statically linked'
+    aws s3 cp "$out/result/bin/wrk" "s3://$AWS_BUCKET/{{ bin_prefix }}/wrk" --only-show-errors
+    aws s3 cp "{{ justfile_directory() }}/range.lua" "s3://$AWS_BUCKET/{{ bin_prefix }}/range.lua" --only-show-errors
+    bench_grant WrkHttpFromVpce "arn:aws:s3:::$AWS_BUCKET/{{ bin_prefix }}/*"
+    echo "wrk-http ready: s3://$AWS_BUCKET/{{ bin_prefix }}/{wrk,range.lua}"
+
+# Remove the binaries and their bucket-policy grant
+clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "{{ common }}"
+    bench_env_load
+    aws s3 rm "s3://$AWS_BUCKET/{{ bin_prefix }}/" --recursive
+    bench_revoke WrkHttpFromVpce
