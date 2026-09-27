@@ -78,6 +78,11 @@ QUERIES = [int(x) for x in cfg("BENCH_QUERIES", "6").split(",") if x.strip()]
 # two stacks can be compared at the same layer. Off by default: it is a
 # diagnostic, and the numbers the comparison plots come from the clean pass.
 HTTP_LOG = cfg("BENCH_HTTP_LOG") == "1"
+# "1" runs the profiled pass with netphase.so LD_PRELOADed into duckdb: every
+# socket send and receive stamped, so a request's life splits into S3's
+# turnaround, the body on the wire and the client's rest. Implies the HTTP
+# log pass, which the split is applied to; prints a `NET PHASE:` line.
+NET_PHASE = cfg("BENCH_NET_PHASE") == "1"
 
 # "1" replaces the TPC-H-over-S3 run with the no-network CPU ladder that
 # apps/miniduckdb/miniosv/main.cc's `cpuprobe` executable runs, step for step
@@ -218,6 +223,7 @@ def tune_nic():
 
 BIN = os.path.join(WORK, "duckdb")
 EXT = os.path.join(WORK, "httpfs.duckdb_extension")
+SHIM = os.path.join(WORK, "netphase.so")
 DB = os.path.join(WORK, "tpch.duckdb")
 
 # Which binary, and whether httpfs is a file beside it or built into it. The
@@ -275,6 +281,25 @@ COPY (
            epoch_us(request.start_time) AS t0_us,
            request.duration_ms AS ms
     FROM duckdb_logs_parsed('HTTP')
+  ),
+  -- active_ms: the union of the requests' intervals, i.e. wall time with at
+  -- least one request outstanding (the miniOSv arm's net_active_ms), as
+  -- opposed to window_ms, which spans the idle stretches between them too.
+  iv AS (
+    SELECT t0_us AS s, t0_us + ms * 1000 AS e,
+           max(t0_us + ms * 1000) OVER (ORDER BY t0_us
+             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS reach
+    FROM r
+  ),
+  isl AS (
+    SELECT s, e,
+           sum(CASE WHEN reach IS NULL OR s > reach THEN 1 ELSE 0 END)
+             OVER (ORDER BY s ROWS UNBOUNDED PRECEDING) AS island
+    FROM iv
+  ),
+  act AS (
+    SELECT sum(mx - mn) / 1000.0 AS active_ms
+    FROM (SELECT island, min(s) AS mn, max(e) AS mx FROM isl GROUP BY island)
   )
   SELECT count(*) AS n,
          count(*) FILTER (WHERE type = 'GET') AS n_get,
@@ -286,10 +311,75 @@ COPY (
          min(ms) AS ms_min,
          max(ms) AS ms_max,
          sum(ms) AS ms_sum,
-         round((max(t0_us + ms * 1000) - min(t0_us)) / 1000.0, 2) AS window_ms
+         round((max(t0_us + ms * 1000) - min(t0_us)) / 1000.0, 2) AS window_ms,
+         round((SELECT active_ms FROM act), 2) AS active_ms
   FROM r
 ) TO '{out}' (FORMAT json, ARRAY true)
 """
+
+
+def run_sql_sampled(sql, env, deadline_s=300):
+    """run_sql without -json, under `env`, sampling every thread's run-queue
+    wait from /proc while it runs. Returns (stdout, rq_wait_ms or None).
+
+    /proc/<pid>/task/<tid>/schedstat's second field is the time the thread has
+    spent runnable but not running, cumulative; the sum of each thread's last
+    reading is the scheduling delay the query paid -- the number the miniOSv
+    arm reports as wake latency. A thread that exits between two samples keeps
+    its last reading; DuckDB's pool lives until the process does."""
+    p = subprocess.Popen([BIN, DB, "-c", sql], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, env=env)
+    waits = {}
+    tdir = "/proc/{}/task".format(p.pid)
+    t_end = time.monotonic() + deadline_s
+    while p.poll() is None:
+        try:
+            for tid in os.listdir(tdir):
+                try:
+                    with open(os.path.join(tdir, tid, "schedstat")) as fh:
+                        waits[tid] = int(fh.read().split()[1])
+                except (OSError, IndexError, ValueError):
+                    pass
+        except OSError:
+            pass
+        if time.monotonic() > t_end:
+            p.kill()
+            raise RuntimeError("netphase pass exceeded {} s".format(deadline_s))
+        time.sleep(0.05)
+    out, err = p.communicate()
+    if p.returncode != 0:
+        raise RuntimeError((err or out).strip())
+    return out, (sum(waits.values()) / 1e6 if waits else None)
+
+
+def netphase_report(qn, path, rq_wait_ms):
+    """Turn netphase.so's key=value dump into one NET PHASE line."""
+    kv = {}
+    with open(path) as fh:
+        for line in fh:
+            k, _, v = line.rstrip("\n").partition("=")
+            kv[k] = v
+
+    def p50(key):
+        # 1 ms buckets, the last one open-ended; the bucket's midpoint.
+        h = [int(x) for x in kv[key].split(",")]
+        total, acc = sum(h), 0
+        for i, c in enumerate(h):
+            acc += c
+            if total and acc * 2 >= total:
+                return i + 0.5
+        return 0.0
+
+    n, hs = int(kv["req_n"]), int(kv["hs_n"])
+    ms = lambda key, d: int(kv[key]) / 1e6 / d if d else 0.0  # noqa: E731
+    say("NET PHASE: q={} n={} ttfb_ms_avg={:.2f} body_ms_avg={:.2f} gap_ms_avg={:.2f} "
+        "ttfb_ms_p50={:.1f} body_ms_p50={:.1f} hs_n={} hs_ms_avg={:.2f} conns={} bytes={} "
+        "window_ms={:.1f} rq_wait_ms={}".format(
+            qn, n, ms("req_ttfb_ns", n), ms("req_body_ns", n), ms("req_gap_ns", int(kv["req_gap_n"])),
+            p50("req_hist_ttfb_ms"), p50("req_hist_body_ms"), hs,
+            (int(kv["hs_ttfb_ns"]) + int(kv["hs_body_ns"])) / 1e6 / hs if hs else 0.0,
+            kv["conns"], kv["req_bytes"], int(kv["window_ns"]) / 1e6,
+            "{:.1f}".format(rq_wait_ms) if rq_wait_ms is not None else "na"))
 
 
 def http_profile(qn):
@@ -317,13 +407,29 @@ def http_profile(qn):
         "SET enable_logging=true; "
     ).format(ext=LOAD_HTTPFS, threads=thread_setting())
     sql = prelude + "PRAGMA tpch({});".format(qn) + HTTP_STATS_SQL.format(out=out)
+    np_out = os.path.join(WORK, "netphase-q{}.txt".format(qn))
+    if os.path.exists(np_out):
+        os.remove(np_out)
     t0 = time.perf_counter()
     try:
-        run_sql(sql, json_out=False)
+        if NET_PHASE:
+            # The same pass carries the shim, so the log's per-request life and
+            # the shim's split of it come from one execution.
+            env = dict(os.environ, LD_PRELOAD=SHIM, NETPHASE_OUT=np_out)
+            _, rq_wait_ms = run_sql_sampled(sql, env)
+        else:
+            run_sql(sql, json_out=False)
     except Exception as e:
         say("HTTP STATS: FAILED {}".format(str(e).replace("\n", " ")[:300]))
+        if NET_PHASE:
+            say("NET PHASE: FAILED same pass")
         return
     ms = (time.perf_counter() - t0) * 1000
+    if NET_PHASE:
+        try:
+            netphase_report(qn, np_out, rq_wait_ms)
+        except Exception as e:
+            say("NET PHASE: FAILED {}".format(str(e).replace("\n", " ")[:300]))
     try:
         with open(out) as fh:
             rows = json.load(fh)
@@ -340,11 +446,11 @@ def http_profile(qn):
     conc = (r.get("ms_sum") or 0) / window if window else 0
     say(
         "HTTP STATS: q={} n={} get={} head={} ms_avg={} ms_p50={} ms_p90={} "
-        "ms_p99={} ms_min={} ms_max={} ms_sum={} window_ms={} concurrency={:.2f} "
+        "ms_p99={} ms_min={} ms_max={} ms_sum={} window_ms={} active_ms={} concurrency={:.2f} "
         "profile_ms={:.1f}".format(
             qn, r.get("n"), r.get("n_get"), r.get("n_head"), r.get("ms_avg"),
             r.get("ms_p50"), r.get("ms_p90"), r.get("ms_p99"), r.get("ms_min"),
-            r.get("ms_max"), r.get("ms_sum"), r.get("window_ms"), conc, ms)
+            r.get("ms_max"), r.get("ms_sum"), r.get("window_ms"), r.get("active_ms"), conc, ms)
     )
 
 
@@ -479,6 +585,9 @@ def main():
         if not HTTPFS_BUILTIN and not fetch(ENDPOINT + "/" + BIN_PREFIX + "/httpfs.duckdb_extension", EXT):
             say("INCOMPLETE: httpfs extension unavailable")
             return 1
+        if NET_PHASE and not fetch(ENDPOINT + "/" + BIN_PREFIX + "/netphase.so", SHIM):
+            say("INCOMPLETE: netphase.so unavailable (just setup-netphase in competitors/duckdb-linux)")
+            return 1
 
         setup_views()
         answers = fetch_answers()
@@ -508,7 +617,7 @@ def main():
                     match = "no"
             say("Q{:02d}: {:.1f} ms, {} rows, match={}".format(qn, ms, len(rows), match))
 
-            if HTTP_LOG:
+            if HTTP_LOG or NET_PHASE:
                 http_profile(qn)
 
         say("")

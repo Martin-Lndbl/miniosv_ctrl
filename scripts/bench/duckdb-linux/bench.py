@@ -81,6 +81,12 @@ class DuckdbLinux(Bench):
         # inside DuckDB, above whichever client is underneath, which is where
         # the miniOSv arm can be compared to this one at the same layer.
         "httplog": (None, str),
+        # "1" runs the httplog pass with competitors/duckdb-linux/netphase
+        # LD_PRELOADed into duckdb: every socket send and receive stamped, so
+        # a request's life splits into S3's turnaround, the body on the wire,
+        # and the client's rest -- the split the miniOSv arm always records.
+        # Reported as a `NET PHASE:` line beside `HTTP STATS:`.
+        "netphase": (None, str),
         # "1" swaps the S3 run for the no-network CPU ladder main.cc's
         # `cpuprobe` executable runs. Same steps, same sizes, same order, so
         # the two arms' PROBE rows subtract directly.
@@ -92,7 +98,7 @@ class DuckdbLinux(Bench):
         "scheme": (None, str),  # "http" dials S3 on port 80; apps/bench/duckdb-tpch's tls=0
     }
     defaults = {"query": 6, "sf": "1", "pin": "", "gro": "", "queues": "",
-                "httplog": "", "cpuprobe": "", "threads": 0, "scheme": "https"}
+                "httplog": "", "netphase": "", "cpuprobe": "", "threads": 0, "scheme": "https"}
     instance_tag = "duckdb-linux-bench"
     default_instance = "c7i.large"  # matches apps/bench/duckdb-tpch's default
     max_vm_seconds = 300
@@ -135,6 +141,24 @@ class DuckdbLinux(Bench):
         "http_concurrency": (r"^HTTP STATS: .*\bconcurrency=([\d.]+)", float),
         "http_profile_ms": (r"^HTTP STATS: .*\bprofile_ms=([\d.]+)", float),
         "http_failed": (r"^HTTP STATS: (FAILED)", str),
+        # Union of the logged requests' intervals: wall time with at least one
+        # outstanding, the miniOSv arm's net_active_ms. window_ms spans idle too.
+        "http_active_ms": (r"^HTTP STATS: .*\bactive_ms=([\d.]+)", float),
+        # From the netphase pass (see the knob). Averages over the query's
+        # requests; hs_* is the TLS handshake exchange on each fresh connection.
+        "np_n": (r"^NET PHASE: .*\bn=(\d+)", int),
+        "np_ttfb_ms_avg": (r"^NET PHASE: .*\bttfb_ms_avg=([\d.]+)", float),
+        "np_body_ms_avg": (r"^NET PHASE: .*\bbody_ms_avg=([\d.]+)", float),
+        "np_gap_ms_avg": (r"^NET PHASE: .*\bgap_ms_avg=([\d.]+)", float),
+        "np_ttfb_ms_p50": (r"^NET PHASE: .*\bttfb_ms_p50=([\d.]+)", float),
+        "np_body_ms_p50": (r"^NET PHASE: .*\bbody_ms_p50=([\d.]+)", float),
+        "np_hs_n": (r"^NET PHASE: .*\bhs_n=(\d+)", int),
+        "np_hs_ms_avg": (r"^NET PHASE: .*\bhs_ms_avg=([\d.]+)", float),
+        "np_conns": (r"^NET PHASE: .*\bconns=(\d+)", int),
+        "np_bytes": (r"^NET PHASE: .*\bbytes=(\d+)", int),
+        "np_window_ms": (r"^NET PHASE: .*\bwindow_ms=([\d.]+)", float),
+        "np_rq_wait_ms": (r"^NET PHASE: .*\brq_wait_ms=([\d.]+)", float),
+        "np_failed": (r"^NET PHASE: (FAILED)", str),
         # From the cpuprobe ladder. Named per step so one CSV row holds the
         # whole ladder and the two arms' rows subtract column by column.
         "probe_range_scan_ms": (r"^PROBE: name=range_scan ms=([\d.]+)", float),
@@ -205,6 +229,7 @@ class DuckdbLinux(Bench):
             "BENCH_GRO": str(cfg.get("gro") or ""),
             "BENCH_NIC_QUEUES": str(cfg.get("queues") or ""),
             "BENCH_HTTP_LOG": str(cfg.get("httplog") or ""),
+            "BENCH_NET_PHASE": str(cfg.get("netphase") or ""),
             "BENCH_CPU_PROBE": str(cfg.get("cpuprobe") or ""),
             "BENCH_THREADS": str(cfg.get("threads") or ""),
             "BENCH_SCHEME": str(cfg.get("scheme") or ""),

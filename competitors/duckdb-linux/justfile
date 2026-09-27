@@ -53,6 +53,31 @@ setup:
     echo "  s3://$AWS_BUCKET/{{ bin_prefix }}/duckdb"
     echo "  s3://$AWS_BUCKET/{{ bin_prefix }}/httpfs.duckdb_extension"
 
+# Build the socket-phase shim the netphase knob LD_PRELOADs into duckdb, check
+# it asks nothing newer than AL2023's glibc 2.34, and upload it beside the binary
+setup-netphase:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    . "{{ common }}"
+    bench_env_load
+    bench_login
+
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir"' EXIT
+    ${CC:-cc} -O2 -Wall -Wextra -shared -fPIC \
+        -o "$tmpdir/netphase.so" "{{ justfile_directory() }}/netphase/netphase.c" -ldl
+    # A nix cc wrapper bakes store paths into RUNPATH; harmless on AL2023
+    # (the loader falls through to the default path) but strip it when we can.
+    if command -v patchelf >/dev/null; then patchelf --remove-rpath "$tmpdir/netphase.so"; fi
+    newest=$(readelf --dyn-syms -W "$tmpdir/netphase.so" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+    if [ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -1)" != GLIBC_2.34 ]; then
+        echo "netphase.so needs $newest; AL2023 has GLIBC_2.34" >&2
+        exit 1
+    fi
+    aws s3 cp "$tmpdir/netphase.so" "s3://$AWS_BUCKET/{{ bin_prefix }}/netphase.so" --only-show-errors
+    echo "netphase.so uploaded to s3://$AWS_BUCKET/{{ bin_prefix }}/ (needs $newest)"
+
 # Remove this bench's objects and its bucket-policy grant (not the bucket)
 clean:
     #!/usr/bin/env bash

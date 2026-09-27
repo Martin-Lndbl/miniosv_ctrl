@@ -8,10 +8,13 @@ Each bar is the arm's median run of the query, by wall time. Wall time splits in
 outstanding and DuckDB running with none. The outstanding span is apportioned by a request's
 average life. On miniOSv the arm measures that life itself: S3's first-byte
 latency, the bytes on the wire, and what remains (queueing, wake-up, parsing)
-is the stack's. Linux reports a request's life through DuckDB's HTTP log
-(httplog=1, a second logged pass whose own wall time is the bar); S3's part of
-it is taken from the miniOSv arm's measurement of the same query, so the
-remainder is what Linux's stack and client add.
+is the stack's. Linux reports a request's life through DuckDB's HTTP log (httplog=1,
+a second logged pass whose own wall time is the bar). With netphase=1 that pass
+also runs under competitors/duckdb-linux/netphase, which stamps every socket
+send and receive, so the life splits the same way: S3's turnaround, the body
+on the wire, and what the client and stack add -- each measured on Linux
+rather than borrowed from the miniOSv arm. Without it the Linux band is one
+striped block, split unknown.
 """
 import argparse
 import textwrap
@@ -35,20 +38,22 @@ from matplotlib.patches import Patch, Polygon, Rectangle  # noqa: E402
 #   body        from the headers until the last body byte lands;
 #   the rest    waiting for a free worker slot before pick-up, and the
 #               wake-up of the DuckDB thread after.
-# Each request is timed on its own and averaged over the query. Linux has
-# none of this: DuckDB's HTTP log gives one elapsed time per request, so a
-# Linux bar is one band for the request's whole life and one for the time
-# with nothing in flight. What the two arms share is the per-request life
-# printed on each bar; the split of Linux's is unknown.
-PARTS = [("S3 turnaround (worker pick-up to response headers in)", "#c0504d"),
+# Each request is timed on its own and averaged over the query. On Linux the
+# netphase shim stamps the same three moments at the socket: the request's
+# last send, the first byte back, the last byte back; DuckDB's HTTP log gives
+# the request's whole life, and the client's rest is the difference. A Linux
+# run without the shim has only the log, and its band is one striped block.
+PARTS = [("S3 turnaround (request out to response headers in; dial + TLS handshake on a fresh socket)", "#c0504d"),
          ("body on the wire", "#e8a33d"),
          ("network stack + HTTP client", "#2e7d32"),
-         ("Linux: whole request life (DuckDB HTTP log), split unknown", "stripes"),
+         ("Linux: whole request life (DuckDB HTTP log), split not measured", "stripes"),
          ("DuckDB, no request outstanding", "#4472c4")]
 METHOD = ("Bars: the median run's wall time; the number on top is an average request's life. Coloured bands: "
-          "the span with at least one request outstanding, split by how an average request's life divides "
-          "(each request timed on its own by the miniOSv worker, averaged over the query). Linux's HTTP log "
-          "gives one elapsed time per request and no split, so its span is one band.")
+          "the span with at least one request outstanding, split by how an average request's life divides. "
+          "miniOSv: each request timed by the worker. Linux: each request's send, first and last byte stamped at "
+          "the socket by an LD_PRELOAD shim in the same pass as DuckDB's HTTP log, which gives the whole life. "
+          "A Linux receive is stamped when the syscall returns, so its turnaround and body include the kernel's "
+          "receive path and the thread's wake-up; the miniOSv worker stamps the frame as it arrives.")
 
 
 def median_run(g: pd.DataFrame, wall: str) -> pd.Series:
@@ -67,12 +72,25 @@ def miniosv(g: pd.DataFrame) -> tuple[list[float], float, float, float]:
     return parts, s3, wire, per_call
 
 
-def linux(g: pd.DataFrame) -> tuple[list[float], float]:
-    """Wall-time parts and the request's average life; the log has no split."""
+def linux(g: pd.DataFrame) -> tuple[list[float], float, float | None, float | None]:
+    """Wall-time parts, the request's average life, and its turnaround and
+    body when the run had the netphase shim (else None, None: one striped band)."""
     m = median_run(g, "http_profile_ms")
     per_req = m["http_ms_sum"] / m["http_n"]
-    window = m["http_window_ms"]
-    return [0.0, 0.0, 0.0, window, max(0.0, m["http_profile_ms"] - window)], per_req
+    # The union of the requests' intervals, like miniOSv's net_active_ms; the
+    # first-to-last span for runs that predate it.
+    active = m["http_active_ms"] if pd.notna(m.get("http_active_ms")) else m["http_window_ms"]
+    rest = max(0.0, m["http_profile_ms"] - active)
+    if pd.notna(m.get("np_ttfb_ms_avg")):
+        # miniOSv's turnaround includes the dial and TLS handshake of a fresh
+        # socket; the shim reports that exchange apart, so fold it back in per
+        # request. The TCP handshake's own round trip is not stamped and stays
+        # in the rest: a millisecond or so on the few fresh connections.
+        hs = (m["np_hs_n"] * m["np_hs_ms_avg"]) / m["np_n"] if m["np_n"] else 0.0
+        s3, wire = m["np_ttfb_ms_avg"] + hs, m["np_body_ms_avg"]
+        stack = max(0.0, per_req - s3 - wire)
+        return [active * s3 / per_req, active * wire / per_req, active * stack / per_req, 0.0, rest], per_req, s3, wire
+    return [0.0, 0.0, 0.0, active, rest], per_req, None, None
 
 
 def main() -> int:
@@ -103,9 +121,14 @@ def main() -> int:
         lq = lx[lx["query"] == q]
         line = f"Q{q:02d}: a request lives {per_call:.1f} ms on miniOSv (turnaround {s3:.1f}, body {wire:.1f})"
         if len(lq):
-            lparts, lper = linux(lq)
-            bars.append((i * 3 + 1, f"Q{q:02d}\nLinux", lparts, f"{lper:.0f} ms/req"))
-            line += f", {lper:.1f} ms on Linux (no split)"
+            lparts, lper, ls3, lwire = linux(lq)
+            if ls3 is not None:
+                lnote = f"{lper:.0f} ms/req, {100 * lparts[2] / sum(lparts):.1f}% stack"
+                line += f", {lper:.1f} ms on Linux (turnaround {ls3:.1f}, body {lwire:.1f})"
+            else:
+                lnote = f"{lper:.0f} ms/req"
+                line += f", {lper:.1f} ms on Linux (no split)"
+            bars.append((i * 3 + 1, f"Q{q:02d}\nLinux", lparts, lnote))
         print(line)
 
     fig, ax = plt.subplots(figsize=(1.1 * len(bars) + 3, 4.8))
