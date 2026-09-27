@@ -1,0 +1,36 @@
+name = "miniosv-nginx-2w"
+title = "miniOSv against a static nginx on two busy-polling cpus"
+description = """
+The same point as miniosv-nginx -- own nginx, plain HTTP, 128 MiB ranged GETs,
+a connection per block, 128 requests in flight -- on two workers instead of
+eight, so the in-flight depth is kept by 64 connections each. At eight workers
+both arms sat on the instance's 50 Gbps line, which says nothing about what a
+core costs; this asks what two busy-polling cpus carry. 512 blocks per worker
+(128 GiB) so the run lasts long enough to measure either way.
+
+    just queue http/miniosv-nginx-2w
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "workers"
+grid     = { workers = [2] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 500
+
+# "server": the bench launches its own nginx and dials that, not S3.
+target_ip = "server"
+
+[fixed]
+conns  = 64
+block  = "128M"
+blocks = 512
+server = "c6in.8xlarge"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_ZONES     = "eu-north-1c,eu-north-1b,eu-north-1a"  # 1a refused every c6in.8xlarge spot request on 2026-09-27
+BENCH_NOTE      = "miniOSv, 2 workers"
