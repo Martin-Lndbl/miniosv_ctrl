@@ -43,10 +43,15 @@ class WrkHttp(LinuxS3):
         "block": ("BENCH_BLOCK_SIZE", size),
         # "1": Connection: close on every request, the smoltcp-s3 arm's shape.
         "close": ("BENCH_CLOSE", str),
+        # 0 = the machine as shipped; N confines wrk and the NIC to N cores.
+        "cpus": ("BENCH_CPUS", int),
+        # stock = AL2023 as shipped; parity = mininet's wire (mtu 1500, no GRO)
+        "mode": ("MODE", str),
         # The nginx instance type; launched once per point.
         "server": ("BENCH_SERVER", str),
     }
-    defaults = {"threads": 8, "conns": 128, "duration": 30, "block": 128 << 20, "close": "1", "server": "c6in.8xlarge"}
+    defaults = {"threads": 8, "conns": 128, "duration": 30, "block": 128 << 20, "close": "1", "server": "c6in.8xlarge",
+                "cpus": 0, "mode": "stock"}
     instance_tag = "miniosv-wrk-bench"
     default_instance = "c6in.8xlarge"
     max_vm_seconds = 600
@@ -100,6 +105,8 @@ class WrkHttp(LinuxS3):
             "BENCH_BLOCK_SIZE": str(cfg["block"]),
             "BENCH_OBJECT_SIZE": str(size(os.environ.get("AWS_BUCKET_SIZE", "10G"))),
             "BENCH_CLOSE": str(cfg["close"]),
+            "BENCH_CPUS": str(cfg["cpus"]),
+            "MODE": str(cfg["mode"]),
             "RUN_ID": run_id,
         }
         body = (self.scripts_dir / "instance.py").read_text()

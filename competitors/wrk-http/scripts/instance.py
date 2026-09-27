@@ -42,6 +42,16 @@ DURATION = cfg("BENCH_DURATION", "30")
 BLOCK = cfg("BENCH_BLOCK_SIZE", str(128 << 20))
 SIZE = cfg("BENCH_OBJECT_SIZE", str(10 << 30))
 CLOSE = cfg("BENCH_CLOSE", "1")
+# 0 keeps the machine as shipped; N confines the whole receive path -- wrk's
+# threads and the NIC's queues, IRQs and XPS -- to cores 0..N-1, the budget
+# miniOSv's N busy-polling workers get.
+CPUS = int(cfg("BENCH_CPUS", "0") or 0)
+# "stock" leaves AL2023 as shipped (mtu 9001, GRO on -- six times fewer frames
+# per byte than miniOSv can do); "parity" removes what mininet has not, so the
+# two clients see the same wire. competitors/linux-s3 draws the same
+# distinction and this is its match_smoltcp, minus the parts that belong to
+# that binary's socket options.
+MODE = cfg("MODE", "stock")
 BIN = os.path.join(WORK, "wrk")
 LUA = os.path.join(WORK, "range.lua")
 
@@ -73,6 +83,69 @@ def read(path, default=""):
             return fh.read().strip()
     except OSError:
         return default
+
+
+def write(path, value):
+    try:
+        with open(path, "w") as fh:
+            fh.write(str(value))
+        return True
+    except OSError as e:
+        say("             : {} not written ({})".format(path, e))
+        return False
+
+
+def match_mininet(iface):
+    """The same wire mininet has: no jumbo frames, no receive aggregation, no
+    delayed ACK, a fixed receive ceiling. Costs Linux throughput on purpose --
+    minidpdk's mbuf data room is a constexpr 1536, so 1500 is all miniOSv can
+    ever offer, and a per-core comparison at 9001 would compare frame sizes."""
+    mtu = "/sys/class/net/{}/mtu".format(iface)
+    say("parity       : mtu {} -> 1500, GRO off, quickack, rmem ceiling fixed".format(read(mtu)))
+    write(mtu, "1500")
+    run("ethtool", "-K", iface, "gro", "off")
+    run("ethtool", "-K", iface, "lro", "off")
+    route = run("ip", "route", "show", "default").strip()
+    if route and "quickack" not in route:
+        run("ip", "route", "replace", *route.split(), "quickack", "1")
+    write("/proc/sys/net/core/rmem_max", 16777216)
+    write("/proc/sys/net/ipv4/tcp_rmem", "4096 131072 16777216")
+    gro = [l for l in run("ethtool", "-k", iface).splitlines() if l.startswith("generic-receive-offload")]
+    say("             : mtu {} now, {}, route {}".format(
+        read(mtu), gro[0] if gro else "gro unknown",
+        "quickack" if "quickack" in run("ip", "route", "show", "default") else "no quickack"))
+
+
+def cap_cores(iface, n):
+    """As competitors/linux-s3's capped mode does it: irqbalance off, one
+    channel per core of the budget, IRQs and XPS on those cores. wrk itself is
+    confined by taskset, so no softirq or user thread lands outside them."""
+    say("cap          : {} cores, {} channels, IRQs and XPS on 0-{}".format(n, n, n - 1))
+    run("systemctl", "stop", "irqbalance")
+    run("ethtool", "-L", iface, "combined", str(n))
+    pinned = 0
+    for line in read("/proc/interrupts").splitlines():
+        if iface in line and ":" in line:
+            irq = line.split(":", 1)[0].strip()
+            if irq.isdigit():
+                try:
+                    with open("/proc/irq/{}/smp_affinity_list".format(irq), "w") as fh:
+                        fh.write(str(pinned % n))
+                    pinned += 1
+                except OSError:
+                    pass
+    xps, qdir = 0, "/sys/class/net/{}/queues".format(iface)
+    for q in sorted(os.listdir(qdir) if os.path.isdir(qdir) else []):
+        if q.startswith("tx-"):
+            try:
+                with open("{}/{}/xps_cpus".format(qdir, q), "w") as fh:
+                    fh.write(format(1 << (xps % n), "x"))
+                xps += 1
+            except OSError:
+                pass
+    say("             : {} IRQs pinned, XPS on {} tx queues, channels now {}".format(
+        pinned, xps, run("ethtool", "-l", iface).count("Combined") and
+        [ln.split()[-1] for ln in run("ethtool", "-l", iface).splitlines() if "Combined" in ln][-1]))
 
 
 def default_route():
@@ -141,6 +214,7 @@ def main():
         say("target       : http://{}/blob.bin".format(TARGET))
         say("shape        : {} threads x {} conns, {} s, {} byte blocks, close={}".format(
             THREADS, CONNS, DURATION, BLOCK, CLOSE))
+        say("mode         : {}, cpu budget {}".format(MODE, CPUS or "all"))
         say("instance     : {} {}".format(imds("instance-type"), imds("instance-id")))
         say("az           : " + imds("placement/availability-zone"))
         say("kernel       : " + os.uname().release)
@@ -152,9 +226,17 @@ def main():
             return 1
 
         say("=== bench ===")
+        if MODE == "parity":
+            match_mininet(iface)
+        elif MODE != "stock":
+            say("WARNING: unknown MODE={} — running as stock".format(MODE))
+        if CPUS:
+            cap_cores(iface, CPUS)
         env = dict(os.environ, BENCH_BLOCK_SIZE=BLOCK, BENCH_OBJECT_SIZE=SIZE, BENCH_CLOSE=CLOSE)
         cmd = [BIN, "-t", THREADS, "-c", CONNS, "-d", DURATION + "s", "--latency", "--timeout", "30s",
                "-s", LUA, "http://{}/blob.bin".format(TARGET)]
+        if CPUS:
+            cmd = ["taskset", "-c", "0-{}".format(CPUS - 1)] + cmd
         say("cmd          : " + " ".join(cmd))
         n0, c0, t0 = nic(iface), cpu(), time.time()
         try:
