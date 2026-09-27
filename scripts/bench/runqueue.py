@@ -372,16 +372,36 @@ class Runner:
         while now() < end and any(alive(p) for p in deploys):
             time.sleep(2)
 
+    def launched(self) -> set[str]:
+        """Instance ids this queue's own runs printed: from the experiment logs
+        here and the deploy logs under results/ written since it began."""
+        since = self.state["started"] - 60
+        files = list(self.qdir.glob("*.log"))
+        files += [p for p in (runner.ROOT / "results").glob("*/logs/*.log") if p.stat().st_mtime >= since]
+        ids: set[str] = set()
+        for f in files:
+            try:
+                ids |= set(re.findall(r"Instance running: (i-[0-9a-f]+)", f.read_text(errors="replace")))
+            except OSError:
+                pass
+        return ids
+
     def sweep(self) -> None:
-        """Whatever of ours is still up from this queue's window."""
+        """Whatever of ours is still up from this queue's window: what its own
+        runs launched, by id, so a queue in another checkout on the same
+        account keeps its instances."""
         since = self.state["started"] - 60
         ec2 = runner.ec2()
         try:
             up = our_instances(since)
-            if up:
-                ids = [i["InstanceId"] for i in up]
+            mine = self.launched()
+            ids = [i["InstanceId"] for i in up if i["InstanceId"] in mine]
+            others = [i["InstanceId"] for i in up if i["InstanceId"] not in mine]
+            if ids:
                 ec2.terminate_instances(InstanceIds=ids)
                 self.event(f"terminated {', '.join(ids)}")
+            if others:
+                self.event(f"left running, not launched by this queue: {', '.join(others)}")
             imgs = ec2.describe_images(Owners=["self"], Filters=[{"Name": "name", "Values": ["miniosv-*"]}])["Images"]
             for im in imgs:
                 created = datetime.fromisoformat(im["CreationDate"].replace("Z", "+00:00")).timestamp()
