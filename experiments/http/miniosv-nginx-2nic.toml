@@ -1,0 +1,38 @@
+name = "miniosv-nginx-2nic"
+title = "miniOSv on two ENIs: every queue of every NIC, against a static nginx"
+description = """
+The ENA exposes one queue per four vCPUs (8 on a c6in.8xlarge, 4 on a
+4xlarge), so mininet had that many workers at most. With a second ENI attached
+the guest sees two ports and mininet (branch kite/multi-nic) fills them in
+order: the first point uses port 0 only and must behave exactly as before; the
+second spans both ports, each with its own lease, RSS model and next hop. Against its own nginx over plain
+HTTP, 128 MiB blocks, a connection per block. What to look for: twice the workers
+with every connection clean, and no more bandwidth -- the instance allowance is
+shared by its ENIs, so the second NIC buys queues, not bandwidth.
+
+    just queue http/miniosv-nginx-2nic
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.4xlarge"  # the 8xlarge had no spot for an hour on 2026-09-28; 4 queues per ENI here
+axis     = "workers"
+grid     = { workers = [4, 8, 12, 16] }  # 8 per ENI: 4 and 8 stay on port 0, 12 and 16 span both
+reps     = 1
+cooldown = 0
+max_vm_seconds = 500
+
+target_ip = "server"
+
+[fixed]
+conns  = 16
+block  = "128M"
+blocks = 128
+server = "c6in.8xlarge"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+BENCH_ENIS      = "2"
+AWS_BUCKET_SIZE = "10G"
+BENCH_ZONES     = "eu-north-1b,eu-north-1a,eu-north-1c"  # 2026-09-28: c6in.4xlarge spot scored 3 in 1b, 1 elsewhere
+BENCH_NOTE      = "miniOSv, 2 ENIs"

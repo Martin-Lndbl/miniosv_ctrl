@@ -120,7 +120,9 @@ class SmoltcpS3(Bench):
         with log.open("w") as fh:
             p = subprocess.Popen(
                 ["just", "deploy", instance, "--market", self.market,
-                 *(["--zone", self.server.zone] if self.server else [])],
+                 *(["--zone", self.server.zone] if self.server else []),
+                 # More NICs than one: each is a port with its own queues.
+                 *(["--enis", os.environ["BENCH_ENIS"]] if os.environ.get("BENCH_ENIS") else [])],
                 cwd=ROOT,
                 stdout=fh,
                 stderr=subprocess.STDOUT,
