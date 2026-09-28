@@ -1,0 +1,29 @@
+name = "miniosv-resolve"
+title = "miniOSv against S3, the bucket host resolved at boot and spread over the workers"
+description = """
+With resolve=1 boot resolves the bucket host and the eight workers share out
+the front-ends Route 53 answers with, instead of the one the pinned runs bake
+in; the "resolved" line counts them. One rep, https, against the pinned ~40
+Gbps of the same shape.
+
+    just queue s3/miniosv-resolve
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.8xlarge"
+axis     = "resolve"
+grid     = { resolve = [1] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 300
+
+[fixed]
+workers = 8
+conns   = 24
+block   = "128M"
+
+[env]
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "10G"
+BENCH_ZONES     = "eu-north-1c,eu-north-1b,eu-north-1a"
+BENCH_NOTE      = "miniOSv, resolved per worker"

@@ -3,9 +3,9 @@ competitors/nginx-static, launched before a point's runs and terminated after
 them. Each arm of a comparison gets one of its own, launched the same way, so
 the arms differ only in the client.
 
-On-demand, in the zone where the client's spot request scores best: the client
-is pinned to the server's zone (same-zone traffic is free and a hop shorter),
-and a zone with one spot slot must give it to the client, not the server.
+Spot like everything larger than a .large (BENCH_SERVER_MARKET overrides), in
+the zone where the client's spot request scores best: the client is pinned to
+the server's zone (same-zone traffic is free and a hop shorter).
 
 A bench starts it in build() (once per point) and stops it at the next build
 or at exit; the row records the server's id and zone. Its "Instance running:"

@@ -43,8 +43,11 @@ class SmoltcpS3(Bench):
         # An instance type: dial a static nginx of that type launched per point
         # (competitors/nginx-static) instead of S3. The HTTP load head-to-head.
         "server": ("BENCH_SERVER", str),
+        # 1: resolve the bucket host at boot and spread the workers over its front-ends.
+        "resolve": ("BENCH_RESOLVE", size),
     }
-    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "rxdesc": 0, "blocks": 0, "redial": 0, "server": ""}
+    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "rxdesc": 0, "blocks": 0, "redial": 0, "server": "",
+                "resolve": 0}
     instance_tag = "miniosv-loader-*"
     default_instance = "c6in.8xlarge"  # 50 Gbps sustained; c7i.8xlarge caps at 12.5
     server: HttpServer | None = None
@@ -59,6 +62,7 @@ class SmoltcpS3(Bench):
         "tail_ms_max": (r"^TAIL STATS\s*: idle_max_ms=([\d.]+)", float),
         "tail_ms_avg": (r"^TAIL STATS\s*: .*idle_avg_ms=([\d.]+)", float),
         "syn_redials": (r"^syn redials\s*: (\d+)", int),
+        "resolved_frontends": (r"^resolved\s*: (\d+) front-end", int),
         "gbps_steady": (r"^STEADY: ([\d.]+) Gbps", float),
         "gbps_wire": (r"^WIRE: ([\d.]+) Gbps", float),
         "gbps_wire_steady": (r"^WIRE STEADY: ([\d.]+) Gbps", float),
@@ -74,7 +78,7 @@ class SmoltcpS3(Bench):
             # Not S3: this point's own nginx, dialled by address like a front-end.
             if self.server:
                 self.server.stop()
-            self.server = HttpServer(str(cfg["server"]), os.environ.get("BENCH_SERVER_MARKET", "on-demand"),
+            self.server = HttpServer(str(cfg["server"]), os.environ.get("BENCH_SERVER_MARKET", "spot"),
                                                    ROOT / "results/http/logs", client=self.instance,
                                      size=os.environ.get("AWS_BUCKET_SIZE", "10G"))
             ip = self.server.start()
@@ -122,7 +126,9 @@ class SmoltcpS3(Bench):
                 ["just", "deploy", instance, "--market", self.market,
                  *(["--zone", self.server.zone] if self.server else []),
                  # More NICs than one: each is a port with its own queues.
-                 *(["--enis", os.environ["BENCH_ENIS"]] if os.environ.get("BENCH_ENIS") else [])],
+                 *(["--enis", os.environ["BENCH_ENIS"]] if os.environ.get("BENCH_ENIS") else []),
+                 # A zone by hand, e.g. the one whose subnet holds the VPC resolver.
+                 *(["--zone", os.environ["BENCH_ZONE"]] if os.environ.get("BENCH_ZONE") and not self.server else [])],
                 cwd=ROOT,
                 stdout=fh,
                 stderr=subprocess.STDOUT,

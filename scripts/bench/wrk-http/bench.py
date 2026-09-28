@@ -86,7 +86,7 @@ class WrkHttp(LinuxS3):
         super().build(cfg, ip)  # just setup competitors/wrk-http
         if self.server:
             self.server.stop()
-        self.server = HttpServer(str(cfg["server"]), os.environ.get("BENCH_SERVER_MARKET", "on-demand"),
+        self.server = HttpServer(str(cfg["server"]), os.environ.get("BENCH_SERVER_MARKET", "spot"),
                                                ROOT / "results/http/logs", client=self.instance,
                                  size=os.environ.get("AWS_BUCKET_SIZE", "10G"))
         self.server.start()
