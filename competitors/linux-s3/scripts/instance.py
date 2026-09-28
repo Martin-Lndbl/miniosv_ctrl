@@ -390,13 +390,13 @@ def run_bench():
     """Streamed line by line, so a hung run still shows how far it got."""
     rule("bench")
     env = dict(os.environ)
+    env.update({k: str(v) for k, v in CONFIG.items()})
     # The binary has no resolver (static glibc); an address pins, none is
     # resolved here, once, as curl would.
-    if not cfg("AWS_TARGET_IP"):
+    if not env.get("AWS_TARGET_IP"):
         import socket
         env["AWS_TARGET_IP"] = socket.gethostbyname("{}.s3.{}.amazonaws.com".format(BUCKET, REGION))
         say("resolved     : " + env["AWS_TARGET_IP"])
-    env.update({k: str(v) for k, v in CONFIG.items()})
     p = subprocess.Popen([BIN], stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, text=True, env=env)
     assert p.stdout is not None
