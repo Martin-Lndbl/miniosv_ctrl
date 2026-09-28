@@ -242,18 +242,6 @@ def check_bucket_region() -> None:
         )
 
 
-def target_ip() -> str:
-    """Resolve fresh: S3 rotated the address three times in one afternoon."""
-    host = f"{os.environ['AWS_BUCKET']}.s3.{os.environ['AWS_REGION']}.amazonaws.com"
-    out = subprocess.run(
-        ["getent", "ahostsv4", host], capture_output=True, text=True
-    ).stdout
-    for line in out.splitlines():
-        if "STREAM" in line:
-            return line.split()[0]
-    raise SystemExit(f"could not resolve {host}")
-
-
 def parse(text: str, metrics: dict) -> dict:
     return {
         k: (c(m.group(1)) if (m := re.search(pat, text, re.M)) else None)
@@ -382,8 +370,8 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         "--target-ip",
         default=None,
         metavar="ADDR",
-        help="S3 address to compile in; resolved per invocation when "
-        "omitted, and front-ends do not perform alike",
+        help="an S3 front-end to pin instead of resolving the bucket host "
+        "in the guest; front-ends do not perform alike",
     )
     ap.add_argument(
         "--market",
@@ -470,8 +458,8 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
             print(f"  would run {axis}={v} rep={r}")
         return 0
 
-    ip = a.target_ip or target_ip()
-    print(f"target   : {ip}{'' if a.target_ip else ' (resolved)'}")
+    ip = a.target_ip or ""
+    print(f"target   : {ip or 'resolved in the guest'}")
     out.parent.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(out) if out.exists() else pd.DataFrame()
     if not df.empty:

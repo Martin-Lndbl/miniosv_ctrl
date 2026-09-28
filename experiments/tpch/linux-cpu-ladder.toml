@@ -72,7 +72,6 @@ reps     = 2
 cooldown = 0
 max_vm_seconds = 900
 
-target_ip = ""
 
 value_col = "probe_par_tall_ms"
 ylabel    = "par_tall (ms)"

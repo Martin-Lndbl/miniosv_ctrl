@@ -18,7 +18,6 @@ cooldown = 0
 max_vm_seconds = 900        # a stock AMI boots in ~60 s, then 192 GiB
 keep_going = true
 
-target_ip = ""
 
 [fixed]
 workers = 16

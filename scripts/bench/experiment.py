@@ -117,8 +117,8 @@ def main() -> int:
         "--target-ip",
         default=None,
         metavar="ADDR",
-        help="the S3 front-end to use, over the experiment's own choice; the "
-        "queue resolves one per point so the arms of a comparison share it",
+        help="an S3 front-end to pin, over the experiment's own target_ip; "
+        "otherwise the guest resolves the bucket host itself",
     )
     runner.add_profile_arg(ap)
     ap.add_argument("--dry-run", action="store_true")
@@ -174,12 +174,9 @@ def main() -> int:
         runner.check_bucket_region()
 
     fixed = x.get("fixed", {})
-    # Once per experiment: S3 front-ends do not perform alike.
-    ip = a.target_ip or x.get("target_ip") or runner.target_ip()
-    print(
-        f"target     : {ip}"
-        f"{' (given)' if a.target_ip else ' (pinned in the experiment)' if x.get('target_ip') else ' (resolved once)'}"
-    )
+    # A pin, if any: the guest resolves the bucket host itself otherwise.
+    ip = a.target_ip or x.get("target_ip") or ""
+    print(f"target     : {ip or 'resolved in the guest'}{' (given)' if a.target_ip else ''}")
 
     # Interleaved: one rep-major invocation per group of points that share
     # every knob but the axis, so S3 drift lands on every value alike.

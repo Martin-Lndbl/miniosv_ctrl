@@ -12,7 +12,6 @@ max_vm_seconds = 300        # 16 x 96 x 128 MiB = 192 GiB: ~17 s at line rate, ~
 
 # Blank resolves once for the whole experiment; S3 front-ends do not perform
 # alike, so pin one to repeat against it.
-target_ip = ""
 
 [fixed]
 # ENA grants 16 RSS queues on c6in.16xlarge (measured 2026-09-18: asking for

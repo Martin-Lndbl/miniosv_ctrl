@@ -59,11 +59,8 @@ HOST = "{}.s3.{}.amazonaws.com".format(BUCKET, REGION)
 SCHEME = cfg("BENCH_SCHEME", "https") or "https"
 ENDPOINT = "{}://{}".format(SCHEME, HOST)
 
-# Pin the bucket to one S3 front-end, the way a mininet image is built: it
-# compiles in a single address and every connection dials it. DuckDB here
-# resolves the name normally and may spread its connections over whatever
-# DNS hands back, so without this the two sides are not asking the same
-# question. Empty means "resolve normally".
+# An S3 front-end to pin the bucket to, when the other arm is pinned too;
+# empty resolves normally, which is the default on both.
 PIN_IP = cfg("BENCH_PIN_IP")
 if PIN_IP:
     with open("/etc/hosts", "a") as fh:

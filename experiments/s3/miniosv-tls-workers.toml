@@ -12,7 +12,6 @@ max_vm_seconds = 110    # measured: 1 worker moves 16 GiB in ~28 s
 # Blank resolves once for the whole experiment. S3 front-ends do not perform
 # alike: 29-30 Gbps on 3.5.217.210 vs 18 on 16.12.9.50, same configuration. Pin
 # one to repeat against it -- S3 rotates them, so a stale value fails the build.
-target_ip = ""
 
 [fixed]
 block = "128M"

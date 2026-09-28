@@ -43,11 +43,8 @@ class SmoltcpS3(Bench):
         # An instance type: dial a static nginx of that type launched per point
         # (competitors/nginx-static) instead of S3. The HTTP load head-to-head.
         "server": ("BENCH_SERVER", str),
-        # 1: resolve the bucket host at boot and spread the workers over its front-ends.
-        "resolve": ("BENCH_RESOLVE", size),
     }
-    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "rxdesc": 0, "blocks": 0, "redial": 0, "server": "",
-                "resolve": 0}
+    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "rxdesc": 0, "blocks": 0, "redial": 0, "server": ""}
     instance_tag = "miniosv-loader-*"
     default_instance = "c6in.8xlarge"  # 50 Gbps sustained; c7i.8xlarge caps at 12.5
     server: HttpServer | None = None

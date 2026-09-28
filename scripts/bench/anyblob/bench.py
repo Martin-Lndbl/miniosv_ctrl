@@ -9,9 +9,8 @@ stacks' AGGREGATE numbers sit in one plot.
 Runtime knobs, one static binary, no `just deploy`: the launch path is
 competitors/linux-s3's, imported from its driver. What differs is the binary
 in the bucket, the instance script, and the knobs: `pin` says whether the S3
-name is pinned to the one front-end the other arm was compiled against
-(through /etc/hosts), or resolved the way AnyBlob's throughput-based
-resolver would in production.
+name is pinned to the given front-end (through /etc/hosts) or resolved the
+way AnyBlob's throughput-based resolver would in production, the default.
 """
 
 from __future__ import annotations
@@ -53,12 +52,11 @@ class AnyBlob(LinuxS3):
         "block": ("BENCH_BLOCK_SIZE", size),
         "blocks": ("BENCH_BLOCKS", size),             # per worker; 0 = conns
         "chunk": ("BENCH_CHUNK", size),               # recv size per io_uring op
-        # 1 = /etc/hosts pins the bucket to the target IP (parity with the
-        # compiled-in address of the miniOSv arm); 0 = resolve normally.
+        # 1 = /etc/hosts pins the bucket to the target IP; 0 = resolve normally.
         "pin": ("BENCH_PIN", flag),
     }
     defaults = {"workers": 16, "conns": 24, "block": 128 << 20, "blocks": 0,
-                "chunk": 64 << 10, "pin": 1}
+                "chunk": 64 << 10, "pin": 0}
     instance_tag = "anyblob-bench"
     default_instance = "c6in.16xlarge"
     max_vm_seconds = 900

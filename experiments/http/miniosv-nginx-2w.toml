@@ -19,9 +19,6 @@ reps     = 1
 cooldown = 0
 max_vm_seconds = 500
 
-# "server": the bench launches its own nginx and dials that, not S3.
-target_ip = "server"
-
 [fixed]
 conns  = 64
 block  = "128M"

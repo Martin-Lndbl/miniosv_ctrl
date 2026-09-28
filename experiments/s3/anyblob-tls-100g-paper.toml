@@ -16,7 +16,6 @@ cooldown = 0
 max_vm_seconds = 900
 keep_going = true
 
-target_ip = ""
 
 [fixed]
 chunk = "64K"

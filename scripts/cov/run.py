@@ -71,7 +71,7 @@ def main():
 
     if not a.profraw:
         bucket, region = os.environ["AWS_BUCKET"], os.environ["AWS_REGION"]
-        ip = runner.target_ip()
+        ip = os.environ.get("AWS_TARGET_IP", "")
         env = {**os.environ, "MININET_COV": "1", "MININET_HOST": f"{bucket}.s3.{region}.amazonaws.com",
                "MININET_ADDR": ip, "MININET_TLS": str(a.tls), "MININET_WORKERS": str(a.workers),
                "MININET_CONNS": str(a.conns)}

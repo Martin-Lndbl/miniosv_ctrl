@@ -35,7 +35,6 @@ max_vm_seconds = 900
 interleave = true
 keep_going = true
 
-target_ip = ""
 
 value_col = "query_ms"
 ylabel    = "Query latency (ms)"

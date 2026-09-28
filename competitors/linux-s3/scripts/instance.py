@@ -154,7 +154,7 @@ def fingerprint(iface, gw):
     # The bench's scheme, not this script's: the binary fetch below stays HTTPS.
     say("object       : {}://{}.s3.{}.amazonaws.com/blob.bin ({})".format(
         cfg("BENCH_SCHEME", "https"), BUCKET, REGION, cfg("AWS_BUCKET_SIZE")))
-    say("target ip    : " + cfg("AWS_TARGET_IP"))
+    say("target ip    : " + (cfg("AWS_TARGET_IP") or "resolved here"))
     say("tls stub     : " + cfg("BENCH_TLS_STUB", "0"))
     say("scheme       : " + cfg("BENCH_SCHEME", "https"))  # http = no TLS at all
 
@@ -390,6 +390,12 @@ def run_bench():
     """Streamed line by line, so a hung run still shows how far it got."""
     rule("bench")
     env = dict(os.environ)
+    # The binary has no resolver (static glibc); an address pins, none is
+    # resolved here, once, as curl would.
+    if not cfg("AWS_TARGET_IP"):
+        import socket
+        env["AWS_TARGET_IP"] = socket.gethostbyname("{}.s3.{}.amazonaws.com".format(BUCKET, REGION))
+        say("resolved     : " + env["AWS_TARGET_IP"])
     env.update({k: str(v) for k, v in CONFIG.items()})
     p = subprocess.Popen([BIN], stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, text=True, env=env)

@@ -281,16 +281,13 @@ class Runner:
     def deadline(self) -> float:
         return self.state["deadline"]
 
-    def run_one(self, x: dict, reps: int, plot: bool, only: str | None = None,
-                target_ip: str | None = None) -> str:
+    def run_one(self, x: dict, reps: int, plot: bool, only: str | None = None) -> str:
         """Run one experiment to `reps`, or just the point `only` (axis=value),
         retrying while spot is refused. Returns done | failed | expired | stopped."""
         cmd = [sys.executable, str(ROOT / "scripts/bench/experiment.py"), x["path"],
                "--reps", str(reps), "--market", self.state["market"]]
         if only:
             cmd += ["--only", only]
-        if target_ip:
-            cmd += ["--target-ip", target_ip]
         if not plot:
             cmd.append("--no-plot")
         log = self.qdir / (Path(x["path"]).stem + ".log")
@@ -430,20 +427,12 @@ class Runner:
                        if x["status"] != "failed" and k <= x["reps"] and i < len(x["values"])]
                 if not due:
                     continue
-                # One S3 front-end per point, for every arm: they do not
-                # perform alike, and each experiment would otherwise resolve
-                # its own.
-                try:
-                    ip = runner.target_ip()
-                except SystemExit as e:
-                    self.event(f"WARN: {e}; each arm resolves its own front-end")
-                    ip = None
                 verdict = "done"
                 if concurrent:
                     results: dict[str, str] = {}
 
                     def go(x, only):
-                        results[x["name"]] = self.run_one(x, k, plot=False, only=only, target_ip=ip)
+                        results[x["name"]] = self.run_one(x, k, plot=False, only=only)
 
                     threads = []
                     for x in due:
@@ -465,7 +454,7 @@ class Runner:
                     for x in due:
                         only = f"{x['axis']}={x['values'][i]}"
                         self.event(f"{x['name']} {only} rep {k}")
-                        v = self.run_one(x, k, plot=False, only=only, target_ip=ip)
+                        v = self.run_one(x, k, plot=False, only=only)
                         if v in ("expired", "stopped", "credentials"):
                             verdict = v
                             break

@@ -9,7 +9,6 @@ reps     = 3
 cooldown = 0
 max_vm_seconds = 240
 
-target_ip = ""
 
 [fixed]
 block = "128M"

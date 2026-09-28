@@ -21,8 +21,6 @@ reps     = 1
 cooldown = 0
 max_vm_seconds = 500
 
-target_ip = "server"
-
 [fixed]
 conns  = 16
 block  = "128M"

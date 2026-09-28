@@ -171,15 +171,13 @@ def fingerprint(iface, gw):
 
 
 def pin():
-    """Same front-end as the other arm. The miniOSv image compiles one S3
-    address in and every connection dials it; AnyBlob resolves the name per
-    socket and, left alone, spreads over whatever DNS returns (its resolver
-    is built to). BENCH_PIN=1 writes the address into /etc/hosts, which
-    getaddrinfo consults first, so Host and SNI stay the bucket's name and
-    the certificate still verifies. BENCH_PIN=0 leaves the resolver free."""
+    """AnyBlob resolves the name per socket and, left alone, spreads over
+    whatever DNS returns (its resolver is built to). BENCH_PIN=1 writes the
+    given address into /etc/hosts, which getaddrinfo consults first, so Host
+    and SNI stay the bucket's name and the certificate still verifies."""
     rule("resolver")
     ip = cfg("AWS_TARGET_IP")
-    if cfg("BENCH_PIN", "1") == "1" and ip:
+    if cfg("BENCH_PIN", "0") == "1" and ip:
         with open("/etc/hosts", "a") as fh:
             fh.write("\n{} {}\n".format(ip, HOST))
         say("pinned       : {} -> {} (/etc/hosts)".format(HOST, ip))

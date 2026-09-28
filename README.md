@@ -63,7 +63,7 @@ just reproduce miniosv-tls-conns     # bare names work while they stay unique
 
 An experiment holds every parameter that decides what the numbers mean —
 bench, instance, axis, held-constant knobs, compiled-in `[env]`, reps,
-cooldowns, the VM cap, the pinned S3 front-end — plus prose saying what it
+cooldowns, the VM cap, an S3 front-end pinned on purpose — plus prose saying what it
 measures and what has already been ruled out. Reproducing one needs nothing
 but its name.
 

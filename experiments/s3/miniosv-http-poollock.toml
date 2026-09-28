@@ -17,7 +17,6 @@ reps     = 5
 cooldown = 0
 max_vm_seconds = 240
 
-target_ip = ""
 
 [fixed]
 workers = 8
