@@ -209,6 +209,15 @@ class DuckdbTpch(Bench):
         # waiting, and says the compute stage is no longer the constraint.
         "cpus_query": (r"^CPUS: name=q\d\d .*parallelism=([\d.]+)", float),
         "cpus_query_busy": (r"^CPUS: name=q\d\d busy=(\d+)", int),
+        # `cpus_query` counts each pinned worker as a cpu of work: they never
+        # block, so an idle counter reads them as fully busy. This is the same
+        # figure with the workers' held cpu time given back, less the part they
+        # spent doing something; -1 when the worker count was auto.
+        "cpus_query_app": (r"^CPUS: name=q\d\d .*parallelism_app=(-?[\d.]+)", float),
+        # The two halves of a worker's spin, printed all along but never kept:
+        # without them the correction above cannot be redone after the fact.
+        "poll_busy_ms": (r"^POLL STATS: .*busy_ms=([\d.]+)", float),
+        "poll_work_ms": (r"^POLL STATS: .*work_ms=([\d.]+)", float),
         "probe_failed": (r"^PROBE: name=\S+ (FAILED)", str),
         "cpuprobe_ok": (r"^(?:IN)?COMPLETE: cpuprobe ok=(\d+)", int),
         # Where the machine came from: the market (not always the one asked
