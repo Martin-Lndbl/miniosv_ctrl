@@ -323,7 +323,14 @@ class DuckdbTpch(Bench):
         )
         if r.returncode:
             raise SystemExit(f"build failed for {cfg}:\n{r.stdout}\n{r.stderr}")
+        self.setargs(cfg)
 
+    def setargs(self, cfg: dict) -> None:
+        """Write the boot-args sector. Called again right before every deploy,
+        not only after the build: a `make` in the working tree while a queue
+        is live regenerates loader.img without the sector, and the next rep
+        then boots to the usage banner and spins on a billing instance
+        (2026-09-29, tcores rep 2)."""
         # threads=0 means "DuckDB's own default"; don't pass the flag at all.
         thr = f" --threads {cfg['threads']}" if cfg.get("threads") else ""
         mem = f" --memlimit {cfg['memlimit']}" if cfg.get("memlimit") else ""
@@ -351,6 +358,7 @@ class DuckdbTpch(Bench):
         smoltcp-s3's run_once: termination is an API call because a signal can
         resolve to the driver's own pgid and orphan a billing instance."""
         logdir.mkdir(parents=True, exist_ok=True)
+        self.setargs(cfg)
         log = logdir / f"deploy-{instance}-{int(time.time())}.log"
         if up := self.live():
             print(
