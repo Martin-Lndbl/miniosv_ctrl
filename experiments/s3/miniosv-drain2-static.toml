@@ -1,0 +1,49 @@
+name = "miniosv-drain2-static"
+title = "Drain, take 2: rebalancing needs more blocks than connections (miniOSv, static partition)"
+description = """
+The pair miniosv-drain2-pool / miniosv-drain2-static, a source A/B on how
+ranges are handed out. Run one after the other; the arms differ only in
+smoltcp-s3's block assignment.
+
+**Why take 1 was void.** `blocks` defaults to 0, which means one block per
+connection, so every slot dialled exactly one range and never asked for
+another. With nothing left in the pool after the initial dial there is nothing
+to rebalance, and the shared-pool arm could not differ from the partitioned one
+by construction -- it measured noise (mean spread 30.8% against 22.6%, with
+reps overlapping). The same is true of the 200G sweep: conns=64, blocks=0.
+
+So this shape sets **blocks = 64 against conns = 16**, four rounds a slot, at
+32 MiB a block to keep the 4 GiB total. Only now can a worker that is running
+slow take fewer ranges while a fast one takes more.
+
+What the two arms do. Partitioned: worker i owns blocks [i*64, (i+1)*64) and
+holds the run open until its own are done. Pooled: one atomic counter, every
+slot claims the next unclaimed block, one relaxed fetch_add per block.
+
+The metric is the spread between the first and last worker to finish, over the
+run. On r6in.32xlarge the partitioned sweep spread 13.8/33.7/46.1/56.5% at
+8/16/24/32 workers, the 32-worker run splitting cleanly in two because half the
+workers had drawn a front-end that will not serve jumbo.
+
+c6in.large supplies that imbalance for free through the same lottery; `over
+1514` and `resolved` in each log say whether a rep drew a mixed pair.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.large"
+axis     = "conns"
+grid     = { conns = [16] }
+reps     = 4
+cooldown = 0
+max_vm_seconds = 600
+
+[fixed]
+workers = 2
+block   = "32M"
+blocks  = 64
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "miniOSv static partition"
