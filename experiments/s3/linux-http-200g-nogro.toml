@@ -1,0 +1,44 @@
+name = "linux-http-200g-nogro"
+title = "HTTP (no TLS): Linux with receive aggregation removed and nothing else"
+description = """
+A sanity check on one point, to be sure the 6x gap between Linux and
+Linux-parity is receive aggregation and not one of the other four things
+parity changes.
+
+parity is `capped` plus five steps: MTU 1500, GRO off, quickack, a raised
+rmem ceiling with autotuning bypassed, and busy poll. Two reasons to doubt
+that the label "no jumbo/GRO" described it. The MTU step is a **no-op**:
+with GRO off every point measured 1396-1435 bytes an IP datagram, so S3
+sends 1500-byte frames whatever the interface says, and jumbo was never in
+play. And quickack, the fixed receive buffer and busy poll are arguably
+*advantages* handed to Linux -- they make it behave more like mininet, not
+less capable.
+
+So this mode is `capped` minus GRO, nothing else. At 8 cores capped
+measured 136.9 Gbps and parity 23.2. If this lands near 23 the gap is GRO
+alone and the other four steps are noise; if it lands near 137 then
+something else in parity is doing the work and the conclusion in the figure
+is wrong.
+
+One point, 8 cores, where the gap is widest. Temporary: delete once it has
+answered.
+"""
+
+bench    = "competitors/linux-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [8] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+
+[fixed]
+conns = 64
+block = "128M"
+mode  = "nogro"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "Linux (GRO off only)"

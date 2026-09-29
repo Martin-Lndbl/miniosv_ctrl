@@ -1,28 +1,45 @@
 #!/usr/bin/env python3
-"""The 200 Gbps HTTP figure: three curves against cores, one line for stock.
+"""The 200 Gbps HTTP figure: throughput against pinned cores.
 
     scripts/bench/plot-http-200g.py [out.png]
 
-miniOSv, Linux capped and Linux parity share an x axis that means the same
-thing on all three -- pinned cores, one RSS queue each. Linux stock does not:
-nothing restricts it, so its `workers` is the client's thread count with all
-128 cores behind it. It is drawn as a horizontal reference line at its best
-point, labelled with the threads it took, rather than as a fourth curve on an
-axis it does not belong to.
+The two-ENI arm is deliberately absent: it answers a different question
+(a second NIC costs about 10% and adds no bandwidth, measured at 32/40/64
+workers) and its 64-worker point stretches the axis so far that the rest of
+the figure is unreadable. Its numbers are in
+results/s3/miniosv-http-200g-2nic.csv.
 
-Two panels, because the arms disagree about which number matters:
+All arms share an x axis: the cores the run was given. "Provisioned", not
+"pinned to an RSS queue" -- that equivalence only holds on the unikernel,
+where a worker owns a queue and a core together. Linux is given the same
+core budget (irqbalance off, channels set to N, IRQs and XPS on cores
+0..N-1) but the kernel is free to schedule softirq work as it likes, so its
+cores are not bound to queues the way mininet's are. It keeps every feature
+it would normally have; the second Linux curve drops it to smoltcp's
+constraints -- MTU 1500 and no GRO -- and is there to price those rather
+than as a fair comparison.
 
-  throughput   TRANSFER, payload with connection setup excluded -- the one
-               figure apps/bench/smoltcp-s3 and competitors/linux-s3 define
-               identically. AGGREGATE is drawn faint behind it; the two
-               coincide on miniOSv (512 connections up in ~1.4 ms) and sit
-               30% apart on Linux (~3 s), so the gap is itself the result.
+The third curve is `nogro1500`, not `parity`. Both drop Linux to MTU 1500
+with GRO off, but parity also sets quickack, an rmem ceiling and busy poll
+-- settings meant to make Linux resemble smoltcp that in fact cost it more
+than losing jumbo does. Measured at 8 cores:
 
-  efficiency   gigabits delivered per cpu-second. On miniOSv cpu_s is
-               workers x wall, since a pinned busy-poller holds its core
-               whether or not a frame arrives; on Linux it is measured from
-               /proc/stat. That makes stock comparable here even though it is
-               not comparable on the left.
+    capped     MTU 9001  GRO on                136.9 Gbps
+    nogro      MTU 9001  GRO off               129.5      GRO:      -5%
+    nogro1500  MTU 1500  GRO off                60.3      jumbo:   -53%
+    parity     MTU 1500  GRO off  + 3 sysctls   23.2      sysctls: -62%
+
+So parity is not "Linux under smoltcp's constraints", it is Linux hobbled
+by configuration we imposed, and nogro1500 is what that arm was meant to
+be. With GRO off each IP datagram is one wire frame, and at MTU 9001 that
+frame is 7115 bytes, so **S3 does send jumbo**; mininet cannot, because
+minidpdk's mbuf data room is a constexpr 1536.
+
+Plotted on AGGREGATE -- payload over the whole run -- because it is defined
+identically on both arms and is physical. TRANSFER, which excludes setup,
+over-corrects on Linux: it subtracts the slowest handshake as though nothing
+transferred while connections were coming up, which produced 206 Gbps on a
+200 Gbps wire. Both columns are in the CSVs.
 """
 import csv
 import sys
@@ -37,11 +54,9 @@ RESULTS = ROOT / "results" / "s3"
 
 ARMS = [
     ("miniosv-http-200g", "miniOSv", "#0b7285", "o", "-"),
-    ("linux-http-200g-capped", "Linux (capped)", "#c92a2a", "s", "-"),
-    ("linux-http-200g-parity", "Linux (parity)", "#e8590c", "^", "--"),
+    ("linux-http-200g-capped", "Linux", "#c92a2a", "s", "-"),
+    ("linux-http-200g-nogro1500", "Linux (MTU 1500, no GRO)", "#e8590c", "^", "--"),
 ]
-STOCK = ("linux-http-200g-stock", "Linux (stock)", "#495057")
-EXTRA = ("miniosv-http-200g-2nic", "miniOSv, 2 ENIs", "#5f3dc4", "D", ":")
 
 
 def load(name):
@@ -49,21 +64,31 @@ def load(name):
     if not p.exists():
         return []
     rows = []
+
+    def num(v, cast=float):
+        """Best effort: a field the guest did not report, or reported oddly
+        (cores_over_50pct came back as "0.0" once), must not take the whole
+        row with it -- only workers and gbps are load-bearing."""
+        try:
+            return cast(float(v))
+        except (TypeError, ValueError):
+            return None
+
     for r in csv.DictReader(p.open()):
         if r.get("valid") != "True":
             continue
-        try:
-            rows.append({
-                "workers": int(r["workers"]),
-                "gbps": float(r["gbps"]) if r.get("gbps") else None,
-                "transfer": float(r["transfer_gbps"]) if r.get("transfer_gbps") else None,
-                "cpu_s": float(r["cpu_s"]) if r.get("cpu_s") else None,
-                "per_cpu": float(r["gbps_per_cpu_s"]) if r.get("gbps_per_cpu_s") else None,
-                "active": int(r["cpus_active"]) if r.get("cpus_active") else None,
-                "elapsed": float(r["elapsed_s"]) if r.get("elapsed_s") else None,
-            })
-        except (KeyError, ValueError):
+        w, g = num(r.get("workers"), int), num(r.get("gbps"))
+        if w is None or g is None:
             continue
+        rows.append({
+            "workers": w,
+            "gbps": g,
+            "transfer": num(r.get("transfer_gbps")),
+            "cpu_s": num(r.get("cpu_s")),
+            "per_cpu": num(r.get("gbps_per_cpu_s")),
+            "active": num(r.get("cpus_active"), int),
+            "elapsed": num(r.get("elapsed_s")),
+        })
     # one point per worker count: the median, so a repeated point does not
     # draw twice and a rerun does not silently win
     out = {}
@@ -86,7 +111,7 @@ def main() -> int:
     fig, ax = plt.subplots(figsize=(7.2, 5.0))
 
     drawn = 0
-    for name, label, colour, marker, style in ARMS + [EXTRA]:
+    for name, label, colour, marker, style in ARMS:
         rows = [r for r in load(name) if r["gbps"]]
         if not rows:
             continue
@@ -106,40 +131,25 @@ def main() -> int:
                             textcoords="offset points", ha="center", fontsize=7.5,
                             color=colour, alpha=0.85)
 
-    # stock is unpinned, so its worker count is not a core count. Place it at
-    # the cores it actually used -- cpu_s / elapsed, measured from /proc/stat
-    # -- which is a number this axis can hold honestly, and mark it with a
-    # vertical line so "how many cores did Linux need" can be read straight
-    # off against the other curves.
-    srows = [r for r in load(STOCK[0]) if r["gbps"]]
-    if srows:
-        best = max(srows, key=lambda r: r["gbps"])
-        cores = (best["cpu_s"] / best["elapsed"]) if best.get("cpu_s") and best.get("elapsed") else None
-        if cores:
-            ax.axvline(cores, color=STOCK[2], ls="-.", lw=1.8)
-            ax.plot([cores], [best["gbps"]], marker="*", ms=15, color=STOCK[2],
-                    label=f"{STOCK[1]} ({best['workers']} threads)")
-            ax.annotate(f"{STOCK[1]}: {best['gbps']:.0f} Gbps\nusing {cores:.0f} cores"
-                        f" ({best['workers']} threads,\nunpinned, jumbo + GRO)",
-                        xy=(cores, best["gbps"]), xytext=(8, -12),
-                        textcoords="offset points", fontsize=8.5, color=STOCK[2])
-
     ax.axhline(200, color="#adb5bd", ls=":", lw=1.2)
     ax.annotate("200 Gbps wire", xy=(0.985, 200), xycoords=("axes fraction", "data"),
                 xytext=(0, -6), textcoords="offset points",
                 ha="right", va="top", fontsize=8.5, color="#868e96")
 
     ax.set_ylim(0, 200)
-    ax.set_xlabel("pinned cores (one RSS queue each)")
+    ax.set_xlabel("provisioned cores")
     ax.set_ylabel("Gbps (payload, whole run)")
     ax.set_title("HTTP GETs from S3: throughput")
     ax.grid(alpha=0.25)
-    ax.legend(fontsize=9, loc="lower right")
+    # upper left is the only empty quadrant: miniOSv rises through the
+    # lower left, both Linux curves sit across the top right, and the
+    # no-GRO curve runs along the bottom.
+    ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
 
 
     fig.tight_layout()
     fig.savefig(out, dpi=150)
-    print(f"{out}  ({drawn} curve(s){', stock line' if srows else ''})")
+    print(f"{out}  ({drawn} curve(s))")
     return 0
 
 

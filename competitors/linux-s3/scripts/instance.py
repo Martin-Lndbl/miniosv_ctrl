@@ -260,16 +260,15 @@ def cap_cores(iface):
     show("xps", "set on {} tx queues".format(xps))
 
 
-def match_smoltcp(iface):
-    """Remove what smoltcp does not have: jumbo frames, receive
-    aggregation, delayed ACK and receive-window autotuning. Costs
-    throughput on purpose."""
-    mtu_path = "/sys/class/net/{}/mtu".format(iface)
-    step("MTU 1500 (smoltcp's frame is 1514 = 1500 payload; ENA defaults to 9001)")
-    show("before", read(mtu_path))
-    write(mtu_path, "1500")
-    show("after", read(mtu_path))
+def gro_off(iface):
+    """Turn off receive aggregation, and nothing else.
 
+    The one thing smoltcp has no equivalent of: the kernel coalescing many
+    frames into one skb before the stack sees them. Measured 2026-09-29 as
+    18-29 KB per IP datagram with it on against ~1.4 KB with it off, on
+    1500-byte frames both ways -- S3 does not offer jumbo, so the MTU step
+    elsewhere in match_smoltcp changes nothing on the wire.
+    """
     def offloads():
         return " ".join(l for l in run("ethtool", "-k", iface).splitlines()
                         if l.startswith(("generic-receive-offload",
@@ -280,6 +279,33 @@ def match_smoltcp(iface):
     run("ethtool", "-K", iface, "gro", "off")
     show("after", offloads())
     show("tso", "left as-is, receive-side workload")
+
+
+def mtu_1500(iface):
+    """Drop the interface to 1500 and nothing else.
+
+    Separated from match_smoltcp so frame size can be priced on its own:
+    that function changes five things at once, and attributing the whole
+    difference to any one of them is guesswork.
+    """
+    mtu_path = "/sys/class/net/{}/mtu".format(iface)
+    step("MTU 1500, alone (smoltcp's frame is 1514 = 1500 payload)")
+    show("before", read(mtu_path))
+    write(mtu_path, "1500")
+    show("after", read(mtu_path))
+
+
+def match_smoltcp(iface):
+    """Remove what smoltcp does not have: jumbo frames, receive
+    aggregation, delayed ACK and receive-window autotuning. Costs
+    throughput on purpose."""
+    mtu_path = "/sys/class/net/{}/mtu".format(iface)
+    step("MTU 1500 (smoltcp's frame is 1514 = 1500 payload; ENA defaults to 9001)")
+    show("before", read(mtu_path))
+    write(mtu_path, "1500")
+    show("after", read(mtu_path))
+
+    gro_off(iface)
 
     step("quickack on the default route (matches smoltcp's set_ack_delay(None))")
     before = run("ip", "route", "show", "default").strip()
@@ -460,17 +486,37 @@ def main():
         # capped is the fair-resources arm: the unikernel's core budget, but
         # every Linux feature it would normally have. parity additionally
         # removes those features.
-        if MODE not in ("stock", "capped", "parity"):
+        if MODE not in ("stock", "capped", "parity", "nogro", "nogro1500"):
             say("WARNING: unknown MODE={} — running as stock".format(MODE))
-        if MODE in ("capped", "parity"):
+        if MODE in ("capped", "parity", "nogro", "nogro1500"):
             cap_cores(iface)
         if MODE == "parity":
             match_smoltcp(iface)
+        # capped minus receive aggregation and nothing else, to separate what
+        # GRO is worth from the other four things parity changes (MTU, which
+        # is a no-op against S3; quickack; the rmem ceiling; busy poll).
+        if MODE == "nogro":
+            gro_off(iface)
+        # capped, minus GRO and minus jumbo, but keeping delayed ACK, rmem
+        # autotuning and interrupt-driven receive. Against `nogro` this
+        # prices frame size alone; against `parity` it prices the three
+        # sysctls parity also changes.
+        if MODE == "nogro1500":
+            gro_off(iface)
+            mtu_1500(iface)
         if MODE == "stock":
             say("MODE=stock — as-shipped AL2023 defaults, nothing changed")
         elif MODE == "capped":
             say()
             say("   kept         jumbo, GRO, delayed ACK, rmem autotuning")
+        elif MODE == "nogro":
+            say()
+            say("   kept         delayed ACK, rmem autotuning, no busy poll")
+            say("   removed      GRO only")
+        elif MODE == "nogro1500":
+            say()
+            say("   kept         delayed ACK, rmem autotuning, no busy poll")
+            say("   removed      GRO and jumbo")
 
         if not fetch_binary():
             return 1
