@@ -309,7 +309,7 @@ class DuckdbLinux(Bench):
                     break
         finally:
             reclaimed = runner.interrupted(c, iid)
-            c.terminate_instances(InstanceIds=[iid])
+            runner.terminate(c, [iid])
 
         log.write_text(text)
         complete = bool(re.search(r"^COMPLETE:", text, re.M))

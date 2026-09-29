@@ -120,7 +120,7 @@ class HttpServer:
         if not self.iid:
             return
         try:
-            ec2().terminate_instances(InstanceIds=[self.iid])
+            runner.terminate(ec2(), [self.iid])
             print(f"  server {self.iid} terminated", flush=True)
         except Exception as e:  # the sweep catches what this misses
             print(f"    WARN: terminate {self.iid}: {e}", flush=True)

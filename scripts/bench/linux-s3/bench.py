@@ -187,7 +187,7 @@ class LinuxS3(Bench):
                     break
         finally:
             reclaimed = runner.interrupted(c, iid)
-            c.terminate_instances(InstanceIds=[iid])  # only what we launched
+            runner.terminate(c, [iid])  # only what we launched
 
         log.write_text(text)
 

@@ -395,7 +395,7 @@ class Runner:
             ids = [i["InstanceId"] for i in up if i["InstanceId"] in mine]
             others = [i["InstanceId"] for i in up if i["InstanceId"] not in mine]
             if ids:
-                ec2.terminate_instances(InstanceIds=ids)
+                runner.terminate(ec2, ids)
                 self.event(f"terminated {', '.join(ids)}")
             if others:
                 self.event(f"left running, not launched by this queue: {', '.join(others)}")

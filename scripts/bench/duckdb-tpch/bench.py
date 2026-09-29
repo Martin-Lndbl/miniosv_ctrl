@@ -408,7 +408,7 @@ class DuckdbTpch(Bench):
                         break
                     time.sleep(1)
                 reclaimed = runner.interrupted(ec2(), iid)
-                ec2().terminate_instances(InstanceIds=[iid])
+                runner.terminate(ec2(), [iid])
             # SIGINT runs aws-deploy.py's teardown. To the GROUP, not p: p is
             # `just`, which does not forward it.
             with contextlib.suppress(ProcessLookupError, PermissionError):

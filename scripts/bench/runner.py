@@ -145,6 +145,10 @@ def launch(c, run_kwargs: dict, market: str = "on-demand", zone: str | None = No
         run_kwargs = dict(run_kwargs, SubnetId=zones[0][0])
     if market == "on-demand":
         return c.run_instances(**run_kwargs), "on-demand", zones[0][1]
+    # A leaked request counts against the spot limit and the refusal it
+    # causes is reported as scarcity, so clear them before believing one.
+    if n := sweep_spot_requests(c):
+        print(f"    cancelled {n} leaked spot request(s)", flush=True)
     spot = dict(
         run_kwargs,
         InstanceMarketOptions={
@@ -181,6 +185,74 @@ def interrupted(c, iid: str) -> bool:
     except (ClientError, IndexError, KeyError):
         return False
     return inst.get("StateReason", {}).get("Code") == "Server.SpotInstanceTermination"
+
+
+def terminate(c, ids: list[str]) -> None:
+    """Terminate instances and cancel the spot requests that created them.
+
+    Terminating is not enough. A one-time spot request stays `active` after
+    its instance dies, and an active request counts against the account's spot
+    limit exactly as a running instance does. Leaving them behind is how a
+    128-vCPU instance type against a 300-vCPU quota starts refusing the third
+    launch with `MaxSpotInstanceCountExceeded` -- which the runner logs as "no
+    spot in any zone", indistinguishable from real scarcity (2026-09-29: an
+    evening of refusals that were self-inflicted).
+
+    Terminate first, then cancel: cancelling a request does not stop its
+    instance, so the other order would briefly leave one running with nothing
+    recording that we own it.
+    """
+    ids = [i for i in ids if i]
+    if not ids:
+        return
+    with contextlib.suppress(ClientError):
+        c.terminate_instances(InstanceIds=ids)
+    try:
+        r = c.describe_spot_instance_requests(
+            Filters=[{"Name": "instance-id", "Values": ids}]
+        )
+        sirs = [
+            s["SpotInstanceRequestId"]
+            for s in r.get("SpotInstanceRequests", [])
+            if s.get("State") in ("open", "active")
+        ]
+    except ClientError:
+        return
+    if sirs:
+        with contextlib.suppress(ClientError):
+            c.cancel_spot_instance_requests(SpotInstanceRequestIds=sirs)
+
+
+def sweep_spot_requests(c) -> int:
+    """Cancel active spot requests whose instance is gone, and say how many.
+
+    `terminate()` handles the orderly path, but a crash, a SIGKILL or a
+    queue-stop that kills the driver mid-run skips it, and the request is
+    then leaked for good -- AWS keeps a one-time request `active` for as long
+    as its (dead) instance is remembered. Called before launching so a leak
+    costs one wasted attempt at most rather than every attempt thereafter.
+    """
+    try:
+        reqs = c.describe_spot_instance_requests(
+            Filters=[{"Name": "state", "Values": ["open", "active"]}]
+        ).get("SpotInstanceRequests", [])
+    except ClientError:
+        return 0
+    stale = []
+    for r in reqs:
+        iid = r.get("InstanceId")
+        if not iid:
+            continue  # still being fulfilled; leave it alone
+        try:
+            st = c.describe_instances(InstanceIds=[iid])["Reservations"][0]["Instances"][0]
+            if st["State"]["Name"] in ("terminated", "shutting-down"):
+                stale.append(r["SpotInstanceRequestId"])
+        except (ClientError, IndexError, KeyError):
+            stale.append(r["SpotInstanceRequestId"])  # instance forgotten entirely
+    if stale:
+        with contextlib.suppress(ClientError):
+            c.cancel_spot_instance_requests(SpotInstanceRequestIds=stale)
+    return len(stale)
 
 
 def add_profile_arg(ap: argparse.ArgumentParser) -> None:
