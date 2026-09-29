@@ -1,0 +1,56 @@
+name = "linux-sf100-threads"
+title = "DuckDB-on-Linux: find the baseline's own best thread count, sf=100"
+description = """
+The comparison has to put Linux at its own optimum, not at a setting chosen
+for the other arm, and no run so far has looked for it.
+
+What is known. On r6in.16xlarge at #cores Linux ran 193.3 s against
+miniOSv's 201.8 s -- dead even, geomean 1.019 -- and on c5n.18xlarge at 256
+threads it ran 180.0 s against 90.1 s, a 2x loss. The total barely moves
+between those two settings but the per-query numbers swing hugely and in
+both directions: 256 -> 64 threads gains on Q22 (16.59 -> 1.68 s), Q11
+(6.57 -> 1.89), Q13 (9.19 -> 3.76), Q02 (7.46 -> 2.71) and loses on Q19
+(6.74 -> 13.78), Q07 (7.06 -> 12.40), Q14 (4.89 -> 8.79). The small queries
+hate oversubscription; the scan-heavy ones need the request depth it buys.
+So the total is two large opposite effects cancelling, and the minimum is
+probably between the two points rather than at either.
+
+This sweeps 64 (= #cores here), 128, 256 and 512 on the box everything else
+now runs on, so whatever wins is directly comparable to miniOSv's own best:
+512t x 64c, measured at 70.7 s on this footing.
+
+Why it matters beyond fairness. The interesting claim is not that miniOSv is
+faster at some shared setting -- that is a tuning artifact and a reviewer
+will say so -- but that it can exploit a request depth Linux cannot. That
+claim needs Linux measured where Linux is best. If Linux also improves
+steadily with threads, the claim is wrong and worth knowing.
+
+Note the asymmetry in the knobs. miniOSv has two, `threads` and
+`conns_per_worker`, because its in-flight ceiling is
+min(threads, workers x conns) -- that is why its sweep moved both. Linux has
+only `threads`: the kernel's socket pool is not a fixed number the bench
+sets. So this sweep is one-dimensional by nature, not by omission.
+
+No code change. One boot per point, all 22 queries x 3 turns inside it.
+"""
+bench    = "apps/bench/duckdb-linux"
+instance = "c6in.16xlarge"
+axis     = "threads"
+grid     = { threads = [64, 128, 256, 512] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf    = "100"
+query = "1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8 9 9 9 10 10 10 11 11 11 12 12 12 13 13 13 14 14 14 15 15 15 16 16 16 17 17 17 18 18 18 19 19 19 20 20 20 21 21 21 22 22 22"
+
+[env]
+BENCH_NOTE = "Linux, {threads} threads"

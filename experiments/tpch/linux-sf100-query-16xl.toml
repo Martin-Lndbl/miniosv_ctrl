@@ -27,6 +27,18 @@ are identical across turns too, so it is not connection warmth.
 One boot for all 66 turns instead of one instance per query: spot, not
 compute, is the binding constraint -- c6in.16xlarge scores 1 of 10 in every
 AWS region -- and a whole rep is minutes of query time inside the vm cap.
+
+Run on c5n.18xlarge, not c6in.16xlarge: c6in spot was unobtainable (score
+1-2, 61 refusals for one grant in two hours) while c5n scores 3 and granted
+first try. 72 vCPU, 192 GiB, the same 100 Gbps, $0.418/h against $0.390.
+
+Validated before the switch (miniosv-sf100-c5n-check, 2026-09-29): Q01 and
+Q06 fetch byte-for-byte the same bodies as c6in -- 5945382073 and 5348085472
+-- with requests within +-5, so the read path is unchanged across the CPU
+generation and the older ENA. Two differences that matter: c5n grants 8
+io-queues where c6in.16xlarge grants 16, so workers=8 sits exactly at the cap
+rather than under it; and the TX ring clamps to 1024 descriptors against the
+4096 asked for.
 """
 bench    = "competitors/duckdb-linux"
 instance = "c6in.16xlarge"

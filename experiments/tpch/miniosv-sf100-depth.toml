@@ -1,0 +1,103 @@
+name = "miniosv-sf100-depth"
+title = "DuckDB-on-miniOSv: how deep can the request pipeline go? threads and connections together, sf=100"
+description = """
+The primary objective, stated plainly: make miniOSv faster. The sf=100 suite
+is latency-bound -- ttfb 23 ms, 2-47k requests a query -- so its time is
+
+    query_s ~= requests * ttfb / in_flight
+
+and every win so far has come from raising in_flight. 64 threads (#cores)
+gives 201.8 s, 256 threads gives 83.2 s on the same r6in.16xlarge. That is
+the 2.4x we already know about.
+
+**What bounds in_flight is not the thread count alone.** Two things cap it
+and the smaller one wins:
+
+  * `Service::get()` is synchronous, so a DuckDB thread holds at most one
+    outstanding request -> in_flight <= threads;
+  * mininet's pool is `workers * conns_per_worker` connections, and
+    service.rs says so in its first paragraph -> in_flight <= 8 * 32 = 256.
+
+At the 256-thread setting both are 256, and the measured in_flight is 140-220
+-- pressing on the ceiling, not floating below it. So raising threads alone
+buys nothing: the pool binds. Raising connections alone buys nothing: the
+threads bind. They have to move together, and no run so far has moved them
+together.
+
+This sweep walks the diagonal, doubling the ceiling each step:
+
+    threads  conns/worker  pool  ceiling
+      256         32        256    256    <- today's setting, and the control
+      512         64        512    512
+      768         96        768    768
+     1024        128       1024   1024
+
+If the model holds, Q21 (47487 requests) goes 47487 * 23 ms / in_flight:
+8.2 s at 256, 2.1 s at 1024. It will not hold that far -- something else
+becomes the limit -- and finding out which is the point of the run:
+
+  * the pollers. 8 workers carried 29% utilisation at 8x32; `poll_work_ms`
+    against `poll_busy_ms` says whether they saturate, and if they do the
+    next sweep is over `workers`.
+  * S3. `ttfb_us_avg` rises with concurrency; if 1024 in flight costs 40 ms
+    of first byte the depth pays for itself only partly.
+  * DuckDB. At 256 threads on 64 cpus the workers already idle in the task
+    scheduler's semaphore (per-query spread 2.03x, see the census runs);
+    4x oversubscription was where that started. 1024 threads on 96 cpus is
+    11x, and `census_*` plus the per-turn spread will show it.
+  * memory. 1024 threads x per-thread aggregate partitions at sf=100 is why
+    this runs on the 768 GiB r6in.24xlarge and not a c-family box.
+
+r6in.16xlarge, the same box every other sf=100 run used, so the 256/32 row
+is directly the 83.2 s already measured there and the sweep is read against
+it with nothing else changed. 64 cpus, so the four points are 4x, 8x, 12x and
+16x oversubscribed; the ceiling is what is being swept, not the ratio. (Wider
+r6in sizes score better on spot -- 24xlarge is 3 against the 16xlarge's 2 --
+and every c6in and c5n size scores 1, so if grants dry up the 24xlarge is the
+fallback, at the cost of re-measuring the baseline point.)
+
+One boot per point, all 22 queries x 3 turns inside it. reps = 1 first: four
+spot grants is already the cost, and a second rep is worth buying only for
+whichever ceiling turns out to win.
+"""
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.16xlarge"
+axis     = "threads"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+# `[[points]]`, not `grid`: threads and conns co-vary here. The cartesian
+# product would be 16 boots, and twelve of them would measure a ceiling one
+# of the two knobs already set -- (1024, 32) is a 256-deep pipeline with 768
+# threads asleep.
+[[points]]
+threads = 256
+conns   = 32
+
+[[points]]
+threads = 512
+conns   = 64
+
+[[points]]
+threads = 768
+conns   = 96
+
+[[points]]
+threads = 1024
+conns   = 128
+
+[fixed]
+sf      = "100"
+workers = 8
+query   = "1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8 9 9 9 10 10 10 11 11 11 12 12 12 13 13 13 14 14 14 15 15 15 16 16 16 17 17 17 18 18 18 19 19 19 20 20 20 21 21 21 22 22 22"
+
+[env]
+BENCH_NOTE = "miniOSv, {threads} threads x {conns} conns"
