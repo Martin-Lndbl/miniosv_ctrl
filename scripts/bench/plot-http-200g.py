@@ -32,8 +32,21 @@ than losing jumbo does. Measured at 8 cores:
 So parity is not "Linux under smoltcp's constraints", it is Linux hobbled
 by configuration we imposed, and nogro1500 is what that arm was meant to
 be. With GRO off each IP datagram is one wire frame, and at MTU 9001 that
-frame is 7115 bytes, so **S3 does send jumbo**; mininet cannot, because
-minidpdk's mbuf data room is a constexpr 1536.
+frame is 7115 bytes, so **S3 does send jumbo**.
+
+**And so does mininet, as of 2026-09-29**: the constexpr 1536 mbuf data room
+is gone, so `miniosv-http-200g-jumbo` is the line to read and the 1500 one is
+kept for the delta. At 8 cores that is 63.6 -> 108.4 Gbps aggregate (+70%),
+96.6 -> 132.5 Gbps of frames; by 16 the endpoint absorbs most of it (109.8 ->
+115.9 aggregate, 153.9 -> 173.0 of frames) -- which also says the 153.9 once
+read as a single-ENI ceiling was partly a packet-rate limit, not bandwidth.
+
+Two caveats on that line. S3 caps its own segments at 8228 bytes of payload
+-- Linux advertises 8949 on a 9001 path MTU and receives no more -- so 8294
+bytes a frame is the ceiling for both stacks, not a miniOSv shortfall. And the
+guest resolves a front-end per worker while S3's front-ends disagree about
+jumbo (52.95.169.76 served nothing above 1514, on either stack), so check
+`over 1514` in the run log before trusting a point; these were 98.7% and 96.5%.
 
 Plotted on AGGREGATE -- payload over the whole run -- because it is defined
 identically on both arms and is physical. TRANSFER, which excludes setup,
@@ -53,7 +66,8 @@ ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "results" / "s3"
 
 ARMS = [
-    ("miniosv-http-200g", "miniOSv", "#0b7285", "o", "-"),
+    ("miniosv-http-200g-jumbo", "miniOSv (jumbo, MTU 9001)", "#15aabf", "D", "-"),
+    ("miniosv-http-200g", "miniOSv (MTU 1500)", "#0b7285", "o", "--"),
     ("linux-http-200g-capped", "Linux", "#c92a2a", "s", "-"),
     ("linux-http-200g-nogro1500", "Linux (MTU 1500, no GRO)", "#e8590c", "^", "--"),
 ]
