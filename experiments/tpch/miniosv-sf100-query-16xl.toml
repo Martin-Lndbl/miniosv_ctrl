@@ -51,7 +51,7 @@ rather than under it; and the TX ring clamps to 1024 descriptors against the
 4096 asked for.
 """
 bench    = "apps/bench/duckdb-tpch"
-instance = "c6in.16xlarge"
+instance = "c5n.18xlarge"
 axis     = "query"
 reps     = 3
 cooldown = 0

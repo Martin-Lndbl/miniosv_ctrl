@@ -23,7 +23,7 @@ Two things this run is meant to establish, both open:
 See miniosv-sf100-phase; run the two --concurrent.
 """
 bench    = "competitors/duckdb-linux"
-instance = "c6in.16xlarge"
+instance = "c5n.18xlarge"
 axis     = "query"
 grid     = { query = [1] }
 reps     = 3

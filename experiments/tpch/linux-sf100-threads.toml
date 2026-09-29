@@ -34,7 +34,7 @@ sets. So this sweep is one-dimensional by nature, not by omission.
 No code change. One boot per point, all 22 queries x 3 turns inside it.
 """
 bench    = "apps/bench/duckdb-linux"
-instance = "c6in.16xlarge"
+instance = "c5n.18xlarge"
 axis     = "threads"
 grid     = { threads = [64, 128, 256, 512] }
 reps     = 1

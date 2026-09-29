@@ -7,7 +7,7 @@ every row here has a same-minute row on the other arm. Run the two with
 `just queue miniosv-sf100-query-16xl-vs-anyblob anyblob-sf100-query-16xl --concurrent`.
 """
 bench    = "apps/bench/duckdb-tpch"
-instance = "c6in.16xlarge"
+instance = "c5n.18xlarge"
 axis     = "query"
 grid     = { query = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] }
 reps     = 2

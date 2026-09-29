@@ -19,7 +19,7 @@ No target_ip: both arms resolve by default since 2026-09-28, and a pin costs
 ~6% (Q01 sf=100 9025 resolved against 9646 pinned).
 """
 bench    = "apps/bench/duckdb-tpch"
-instance = "c6in.16xlarge"
+instance = "c5n.18xlarge"
 axis     = "query"
 grid     = { query = [1] }
 reps     = 3

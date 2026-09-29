@@ -61,7 +61,7 @@ spot grants is already the cost, and a second rep is worth buying only for
 whichever ceiling turns out to win.
 """
 bench    = "apps/bench/duckdb-tpch"
-instance = "c6in.16xlarge"
+instance = "c5n.18xlarge"
 axis     = "threads"
 reps     = 1
 cooldown = 0
