@@ -1,0 +1,55 @@
+name = "miniosv-http-200g-2nic"
+title = "HTTP (no TLS): past one ENI's 32 queues, toward the 200 Gbps wire"
+description = """
+One ENI runs out of queues before the wire runs out of bandwidth. The
+single-NIC sweep on this box:
+
+    workers  queues granted  WIRE STEADY   peak
+       16          16          101.7      107.2
+       24          24          145.4      161.0
+       32          32          153.9      168.9
+       48          32          145.4      163.2
+
+Scaling is 7.3 Gbps a worker up to 24 and then stops, and the reason is in
+the second column: **ENA grants at most 32 queues per ENI here**, so the
+48-worker point is 48 threads contending over the same 32 queues and comes
+out slightly worse than 32. That is a queue ceiling, not a stack ceiling --
+and the ring counters agree: across the 48-worker run the TX ring was never
+full once ("0 held a poll for a full ring", with TX descriptors clamped to
+512 by the device), and RX missed 229 frames out of 191.5 million.
+
+So ~154 Gbps sustained is where one ENI ends, against a nominal 200 Gbps
+wire. A second ENI is the only way to add pollers: each is a port with its
+own 32 queues.
+
+Whether it buys throughput is the open question, and the earlier answer was
+no -- on c6in.16xlarge a second ENI added queues but not bandwidth
+(50.15 Gbps at 4, 8, 12 and 16 workers alike), because the wire was already
+the limit there. Here it is not: 154 of 200 leaves room, so if the ceiling
+is per-ENI rather than per-instance the 40- and 64-worker points should go
+past it, and if the instance's 200 Gbps is shared across NICs they will sit
+at 154 no matter how many queues are added.
+
+32 is the control -- the same point as the single-NIC sweep, now with the
+threads spread over two ports -- and 40 and 64 are the two that need the
+second ENI to exist at all.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [32, 40, 64] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+
+[fixed]
+conns = 64
+block = "128M"
+
+[env]
+BENCH_ENIS      = "2"
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "miniOSv, 200G, 2 ENIs"

@@ -75,6 +75,19 @@ COMMON_METRICS = {
     "tls_stub": (r"^bench:.*tls_stub=(\w+)", lambda v: v == "true"),
     "scheme": (r"^bench:.*scheme=(\w+)", str),
     "gbps": (r"AGGREGATE:.*?, ([\d.]+) Gbps", float),
+    # The shared sustained metric: payload with connection setup excluded,
+    # defined identically by apps/bench/smoltcp-s3 and competitors/linux-s3.
+    # Prefer it to `gbps` for anything swept over workers -- AGGREGATE's tail
+    # scales with the connection count, which scales with the worker count.
+    "transfer_gbps": (r"TRANSFER:.*?, ([\d.]+) Gbps", float),
+    # Unanchored on purpose: the Linux guest's console prefixes every line
+    # with "[ 15.146544] cloud-init[22194]: ", so ^ matches nothing there.
+    # What it cost. cpu_s is cores held x wall on the unikernel (pinned
+    # busy-polling workers) and measured /proc/stat busy time on Linux, so
+    # gbps per cpu-second is comparable across the arms.
+    "cpu_s": (r"CPU: .*\bcpu_s=([\d.]+)", float),
+    "cpus_active": (r"CPU: .*\b(?:cores_over_50pct|workers)=(\d+)", int),
+    "gbps_per_cpu_s": (r"CPU: .*\bgbps_per_cpu_s=([\d.]+)", float),
     "mb_per_s": (r"AGGREGATE:.*?=> ([\d.]+) MB/s", float),
     "elapsed_s": (r"AGGREGATE: [\d.]+ MiB in ([\d.]+) s", float),
     "conns_clean": (r"^connections\s+: (\d+)/", int),
@@ -314,6 +327,20 @@ def check_bucket_region() -> None:
         )
 
 
+def derive(row: dict) -> dict:
+    """Fill in what one arm computes and the other cannot.
+
+    The unikernel prints gbps_per_cpu_s itself; the Linux guest's cpu probe
+    runs in the wrapper, which does not know how many bytes the bench moved.
+    Same formula either way: gigabits delivered per cpu-second held.
+    """
+    if not row.get("gbps_per_cpu_s") and row.get("cpu_s") and row.get("elapsed_s"):
+        gbps = row.get("gbps")
+        if gbps and row["cpu_s"] > 0:
+            row["gbps_per_cpu_s"] = round(gbps * row["elapsed_s"] / row["cpu_s"], 2)
+    return row
+
+
 def parse(text: str, metrics: dict) -> dict:
     return {
         k: (c(m.group(1)) if (m := re.search(pat, text, re.M)) else None)
@@ -383,7 +410,15 @@ class Bench:
         """
         return bool(
             row.get("complete")
-            and (row.get("setup_us_max") or 0) < 1_000_000
+            # A lost SYN costs a ~1 s retransmit, which is what this catches.
+            # The max alone cannot: opening thousands of sockets through the
+            # kernel takes hundreds of ms per connection legitimately, so one
+            # retransmit among 2048 connections tripped this on every Linux
+            # point above 8 workers (2026-09-29) while every connection was
+            # clean and the run complete. The median is what a systemic
+            # problem moves; a single outlier is noise at that scale, and the
+            # metric the figure uses excludes setup entirely.
+            and (row.get("setup_us_p50") or row.get("setup_us_max") or 0) < 1_000_000
             and row.get("misrouted") == 0
             # `or 0`: an unreported field is None, and None == 0 is False.
             and (row.get("http_bad") or 0) == 0

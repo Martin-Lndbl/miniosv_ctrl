@@ -1,0 +1,47 @@
+name = "linux-http-200g-parity"
+title = "HTTP (no TLS): Linux (parity) GET throughput vs cores on a 200 Gbps machine"
+description = """
+The decomposition arm of the 200 Gbps core sweep: `capped`, plus removing
+what smoltcp does not have.
+
+    MTU 1500        smoltcp's frame is 1514; ENA defaults to 9001
+    GRO off         smoltcp has no receive aggregation
+    quickack        matches smoltcp's set_ack_delay(None)
+    rmem ceiling    smoltcp's rx ring is a fixed 4 MiB, no autotuning
+    busy poll       matches mininet's busy-polling workers
+
+The mode's own docstring says it "costs throughput on purpose", and that is
+the point: **this is not the headline comparison.** It exists so the gap can
+be split into its parts -- capped -> parity measures what jumbo, GRO and
+autotuning are worth, and what is left over is the per-packet path. Quoting
+this arm as the result would be turning off Linux features to conceal a
+miniOSv limitation, since minidpdk cannot do jumbo at all (mbuf data room is
+a constexpr 1536) and that is an open item, not a fair handicap.
+
+There is one asymmetry it cannot fix. mininet's workers are pinned cores
+busy-polling at 100%; Linux is interrupt-driven and idle between packets.
+Setting busy_poll makes the two look alike without making them equal --
+being interrupt-driven is a real Linux efficiency advantage, which `capped`
+lets it keep and this arm takes away.
+
+Identical shape to miniosv-http-200g and linux-http-200g-capped.
+"""
+
+bench    = "competitors/linux-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [8, 16, 24, 32] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+
+[fixed]
+conns = 64
+block = "128M"
+mode  = "parity"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "Linux (parity)"

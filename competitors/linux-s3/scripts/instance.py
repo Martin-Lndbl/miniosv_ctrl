@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 
 try:                    # injected by the driver ahead of this file
@@ -346,6 +347,46 @@ def counters(iface):
     return out
 
 
+def cpu_times():
+    """Per-cpu busy jiffies from /proc/stat: everything but idle and iowait."""
+    out = {}
+    for line in read("/proc/stat").splitlines():
+        f = line.split()
+        if not f or not f[0].startswith("cpu") or f[0] == "cpu":
+            continue
+        v = [int(x) for x in f[1:]]
+        idle = v[3] + (v[4] if len(v) > 4 else 0)   # idle + iowait
+        out[f[0]] = (sum(v) - idle, sum(v))
+    return out
+
+
+def report_cpu(before, after, elapsed_s):
+    """What the throughput cost, in cpu-seconds.
+
+    The miniOSv arm pins N busy-polling workers, so its cost is N cores held
+    for the run whether or not frames arrive. Linux spreads softirq work whereever
+    the kernel likes, and on `stock` that is all 128 cores -- so "how many
+    cores did Linux use" cannot be read off the worker count and has to be
+    measured. Reporting cpu-seconds on both sides makes Gbps per cpu-second a
+    measurement rather than an argument about what equal resources means.
+    """
+    hz = os.sysconf("SC_CLK_TCK")
+    busy = {c: (after[c][0] - before[c][0]) / hz for c in before if c in after}
+    total = sum(busy.values())
+    active = sum(1 for v in busy.values() if elapsed_s > 0 and v / elapsed_s > 0.5)
+    rule("cpu")
+    say("cpus         : {}".format(len(busy)))
+    say("cpu seconds  : {:.1f} busy over {:.3f} s wall".format(total, elapsed_s))
+    say("cores >50%   : {}".format(active))
+    top = sorted(busy.items(), key=lambda kv: -kv[1])[:8]
+    say("busiest      : " + " ".join("{}={:.1f}s".format(c, v) for c, v in top))
+    # gbps_per_cpu_s is filled in by the caller, which knows the bytes moved;
+    # printed here as a placeholder keeps the line's shape identical to the
+    # unikernel's so one regex serves both.
+    print("CPU: cpus={} cpu_s={:.1f} elapsed={:.3f} cores_over_50pct={}".format(
+        len(busy), total, elapsed_s, active), flush=True)
+
+
 def report_counters(before, after):
     rule("counters")
     for name in sorted(before):
@@ -435,7 +476,11 @@ def main():
             return 1
 
         before = counters(iface)
+        cpu_before = cpu_times()
+        t0 = time.monotonic()
         rc = run_bench()
+        elapsed = time.monotonic() - t0
+        report_cpu(cpu_before, cpu_times(), elapsed)
         report_counters(before, counters(iface))
         return rc
     finally:

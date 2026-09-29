@@ -1,0 +1,59 @@
+name = "miniosv-http-200g"
+title = "HTTP (no TLS): how many polling cores it takes to fill a 200 Gbps wire"
+description = """
+How many cores does 200 Gbps cost? Two points exist and they extrapolate,
+but neither reaches it:
+
+    workers   rss queues   steady        per worker
+       8          8         80.3 Gbps     10.0 Gbps
+      16         16        143.3 Gbps      9.0 Gbps
+
+The marginal rate is 7.9 Gbps a worker, so 200 Gbps lands around 25 -- if
+the NIC keeps handing out queues. **It grants exactly as many as are asked
+for so far**: 8 workers got 8, 16 got 16. An earlier reading of this as a
+hard 16-queue cap was wrong; it came from a run that only asked for 16.
+Where the grant actually stops is the other thing this sweep finds, and it
+decides whether a second ENI is needed to get past it.
+
+Two changes from the first attempt, so 8 and 16 are re-measured rather than
+carried over.
+
+**A 50 GiB blob, not 10.** At 128 MiB a request a 10 GiB object is 80
+distinct ranges, re-read many times over; 400 ranges leans less on whatever
+S3 keeps warm.
+
+**64 connections a worker, not 16.** The first run moved 16 x 16 x 128 MiB
+= 32 GiB and finished in 2.802 s, so ramp-up and drain dominated -- hence an
+aggregate of 98.1 Gbps against a steady 143.3, and `gbps` is scraped from
+the aggregate. Four times the connections is four times the bytes and four
+times the run. `blocks` would do the same thing and do it better, but the
+Linux arm has no such knob, and the two arms have to be configured
+identically to be compared at all.
+
+Watch the boot line for `rss pN: Q queues` (what was granted, against what
+was asked) and for `descriptors:`. TX descriptors clamp to 512 on this part
+against the 4096 requested, far tighter than the 1024 seen on c5n.18xlarge,
+and that is the first thing to suspect if the curve flattens while queues
+are still being granted.
+
+r6in.32xlarge: 200 Gbps, 128 vCPU, spot score 3 in eun1-az2 and az3, the
+best availability of anything measured today.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [8, 16, 24, 32] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+
+[fixed]
+conns = 64
+block = "128M"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "miniOSv, 200G"
