@@ -274,7 +274,7 @@ class Bench:
     def build(self, cfg: dict, ip: str) -> None:
         raise NotImplementedError
 
-    def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
+    def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict | list[dict]:
         raise NotImplementedError
 
     def summary(self, row: dict) -> str:
@@ -487,38 +487,51 @@ def main(bench: Bench, argv: list[str] | None = None) -> int:
         ran_one = True
         for attempt in range(6):  # the vCPU quota counts instances still shutting down
             try:
-                row = bench.run_once(instance, out.parent / "logs", cfg, ip)
+                got = bench.run_once(instance, out.parent / "logs", cfg, ip)
             except Exception as e:  # noqa: BLE001
                 if "VcpuLimitExceeded" not in str(e) or attempt == 5:
                     raise
-                row = None
+                got = None
+            # One run, but a point that does several pieces of work in one
+            # boot (duckdb-tpch with a query list) answers with a row each.
+            # They share the instance, so the retry below reads the first.
+            rows = (got if isinstance(got, list) else [got]) if got is not None else []
+            row = rows[0] if rows else None
             if row is not None and row.get("interrupted"):
                 print("    WARN: EC2 reclaimed the spot instance mid-run", flush=True)
             log = out.parent / "logs" / str((row or {}).get("log") or "")
-            if row is not None and (bench.valid(row) or not log.is_file()
+            if row is not None and (any(bench.valid(r) for r in rows) or not log.is_file()
                                     or "VcpuLimitExceeded" not in log.read_text(errors="replace")):
                 break
             print("    vCPU quota hit; retrying in 90 s", flush=True)
             time.sleep(90)
-        row |= {
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "instance": instance,
-            "axis": axis,
-            "axis_value": value,
-            "rep": rep,
-            "note": os.environ.get("BENCH_NOTE", ""),
-            **cfg,
-        }
-        row["valid"] = bench.valid(row)
-        if row.get("bytes") and row.get("elapsed_s"):
-            row["est_rx_pps"] = round(row["bytes"] / 1460 / row["elapsed_s"])
-        if row.get("gbps") and row.get("workers_actual"):
-            row["gbps_per_worker"] = round(row["gbps"] / row["workers_actual"], 4)
-        if row.get("setup_us_p50"):
-            # p50, not the mean: one slow handshake is not every handshake.
-            row["setup_degraded"] = row["setup_us_p50"] > 10 * SETUP_BASELINE_US
+        # A run is usually one row, but a bench whose point does several
+        # pieces of work in one boot (duckdb-tpch with a query list) returns
+        # one row each. `cfg` is applied first so a row's own value -- the
+        # query it is actually for -- wins over the point's.
+        for r in rows:
+            r |= {
+                "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "instance": instance,
+                "axis": axis,
+                "axis_value": value,
+                "rep": rep,
+                "note": os.environ.get("BENCH_NOTE", ""),
+                **{k: v for k, v in cfg.items()
+                   if k != "query" or r.get("query") is None},
+            }
+            r["valid"] = bench.valid(r)
+            if r.get("bytes") and r.get("elapsed_s"):
+                r["est_rx_pps"] = round(r["bytes"] / 1460 / r["elapsed_s"])
+            if r.get("gbps") and r.get("workers_actual"):
+                r["gbps_per_worker"] = round(r["gbps"] / r["workers_actual"], 4)
+            if r.get("setup_us_p50"):
+                # p50, not the mean: one slow handshake is not every handshake.
+                r["setup_degraded"] = r["setup_us_p50"] > 10 * SETUP_BASELINE_US
+        # What the console line and the notification below report.
+        row = rows[-1]
 
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame(rows)], ignore_index=True)
         df.to_csv(out, index=False)  # a partial sweep survives interruption
         summary = bench.summary(row)
         print(f"  {summary}, valid={row['valid']}")

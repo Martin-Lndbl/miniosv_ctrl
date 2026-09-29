@@ -53,7 +53,12 @@ class DuckdbTpch(Bench):
     name = "duckdb-tpch"
     os_name = "miniosv"
     knobs = {
-        "query": (None, int),  # boot arg -- which TPC-H query (1-22)
+        # boot arg -- which TPC-H query (1-22), or several space-separated
+        # ("1 6 9") to run them in one boot. `tpch` has always taken a list;
+        # what a list needs from this side is a row per query, which
+        # run_once splits out of the log. A lone number stays an int so the
+        # column reads the same as it always has.
+        "query": (None, lambda v: int(v) if str(v).strip().isdigit() else str(v).strip()),
         "sf": (None, str),  # boot arg -- scale factor, matches tpch/sf<N>/
         # boot arg -- DuckDB's thread count; 0 leaves its own default (one per
         # CPU). Worth sweeping because mininet's workers poll without
@@ -119,8 +124,12 @@ class DuckdbTpch(Bench):
         "requests_retried": (r"^BUF STATS: .*retried=(\d+)", int),
         "hw_concurrency": (r"^cpus: hw_concurrency=(\d+)", int),
         "duckdb_threads": (r"^cpus: .*duckdb_threads=(\d+)", int),
-        "requests": (r"^CONN STATS: requests=(\d+)", int),
-        "reused": (r"^CONN STATS: requests=\d+ reused=(\d+)", int),
+        # From REQ STATS, which report_net prints per query, not from the
+        # CONN STATS line at the end: that one is the whole boot, so with
+        # several queries in one run every row would carry the same total.
+        # Identical to CONN STATS for a one-query run.
+        "requests": (r"^REQ STATS: .*\brequests=(\d+)", int),
+        "reused": (r"^REQ STATS: .*\breused=(\d+)", int),
         # The split that says whether latency is queueing for a slot or time
         # on the wire, and whether the workers were on a CPU while it elapsed.
         "queue_us_avg": (r"^REQ STATS: queue_us_avg=(\d+)", int),
@@ -337,7 +346,7 @@ class DuckdbTpch(Bench):
         if r.returncode:
             raise SystemExit(f"setargs failed for {cfg!r}:\n{r.stdout}\n{r.stderr}")
 
-    def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
+    def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict | list[dict]:
         """Deploy, wait for the guest's verdict, terminate, parse. Mirrors
         smoltcp-s3's run_once: termination is an API call because a signal can
         resolve to the driver's own pgid and orphan a billing instance."""
@@ -418,15 +427,37 @@ class DuckdbTpch(Bench):
         # Nothing was measured, so nothing is recorded: the experiment fails.
         if m := re.search(r"^spot requested but not provided: .*", text, re.M):
             raise SystemExit(m.group(0))
-        row = parse(text, self.metrics)
-        row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
+        complete = bool(re.search(r"^COMPLETE:", text, re.M))
         # Recorded, not just acted on: a crash and a query that merely returned
         # nothing both come out as valid=False, and only one of them means the
         # image is broken.
-        row["crashed"] = crashed or bool(CRASH.search(text))
-        row["log"] = log.name
-        row["interrupted"] = reclaimed
-        return row
+        crashed_any = crashed or bool(CRASH.search(text))
+
+        def finish(row: dict, q: int | None = None, seq: int = 0) -> dict:
+            row["complete"] = complete
+            row["crashed"] = crashed_any
+            row["log"] = log.name
+            row["interrupted"] = reclaimed
+            if q is not None:
+                row["query"] = q
+                # Which turn it took in the boot, so a list that repeats a
+                # query ("1 1") stays two distinguishable rows.
+                row["query_seq"] = seq
+            return row
+
+        # One boot can run several queries (`tpch --sf 100 1 2 3`), and the
+        # guest clears the counters before each, so every query's block is a
+        # measurement on its own. The block runs from its `Qnn:` line to the
+        # next one; the trailing TPCH SUMMARY and the cumulative CONN STATS
+        # fall after the last block and are deliberately left out of it.
+        heads = list(re.finditer(r"^Q(\d+): ", text, re.M))
+        if len(heads) <= 1:
+            return finish(parse(text, self.metrics))
+        rows = []
+        for i, h in enumerate(heads):
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+            rows.append(finish(parse(text[h.start():end], self.metrics), int(h.group(1)), i + 1))
+        return rows
 
     def valid(self, row: dict) -> bool:
         """No conns/syn_retries here (that is the network stack's own gate,

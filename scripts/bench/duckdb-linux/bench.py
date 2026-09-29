@@ -64,7 +64,10 @@ class DuckdbLinux(Bench):
     bench_path = BENCH
     scripts_dir = SCRIPTS
     knobs = {
-        "query": (None, int),
+        # Several comma-separated ("1,6,9") run in one boot: instance.py
+        # already splits BENCH_QUERIES on commas. A lone number stays an int
+        # so the column reads the same as it always has.
+        "query": (None, lambda v: int(v) if str(v).strip().isdigit() else str(v).strip()),
         "sf": (None, str),
         # An S3 address to pin the bucket name to, or "" to resolve normally.
         # miniOSv compiles in one address; this makes Linux ask the same
@@ -224,7 +227,12 @@ class DuckdbLinux(Bench):
             "AWS_BUCKET": os.environ["AWS_BUCKET"],
             "AWS_REGION": os.environ["AWS_REGION"],
             "BENCH_SF": str(cfg["sf"]),
-            "BENCH_QUERIES": str(cfg["query"]),
+            # Space-separated in the experiment, commas on the wire:
+            # instance.py splits BENCH_QUERIES on commas, but a comma in a
+            # knob is how the harness itself separates sweep values, so
+            # "1,1" would become two points of one query instead of one
+            # point of two. The miniOSv arm takes spaces for the same reason.
+            "BENCH_QUERIES": ",".join(str(cfg["query"]).split()),
             "BENCH_PIN_IP": pin,
             "BENCH_GRO": str(cfg.get("gro") or ""),
             "BENCH_NIC_QUEUES": str(cfg.get("queues") or ""),
@@ -250,7 +258,7 @@ class DuckdbLinux(Bench):
         print(f"    user-data: {len(raw)} bytes -> {len(blob)} gzipped")
         return blob
 
-    def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
+    def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict | list[dict]:
         logdir.mkdir(parents=True, exist_ok=True)
         run_id = f"{instance}-q{cfg['query']}-{int(time.time())}"
         log = logdir / f"run-{run_id}.log"
@@ -304,24 +312,45 @@ class DuckdbLinux(Bench):
             c.terminate_instances(InstanceIds=[iid])
 
         log.write_text(text)
-        row = parse(text, self.metrics)
-        row["market"], row["zone"] = market, zone
-        row["complete"] = bool(re.search(r"^COMPLETE:", text, re.M))
-        row["instance_id"] = iid
-        row["log"] = log.name
-        row["interrupted"] = reclaimed
+        complete = bool(re.search(r"^COMPLETE:", text, re.M))
 
-        # The serial console is not line-atomic: a kernel message can land on
-        # top of the "Qnn: ... ms" line and take the run's only number with it,
-        # leaving a row that completed but measures nothing. TPCH SUMMARY's
-        # ms is the same clock summed over the queries, so for a single-query
-        # run it is that number exactly -- recover it rather than spend another
-        # instance, and record that it was recovered.
-        if row.get("query_ms") is None and row.get("queries_total") == 1 \
-                and row.get("summary_ms") is not None:
-            row["query_ms"] = row["summary_ms"]
-            row["query_ms_from_summary"] = True
-        return row
+        def finish(row: dict, q: int | None = None, seq: int = 0) -> dict:
+            row["market"], row["zone"] = market, zone
+            row["complete"] = complete
+            row["instance_id"] = iid
+            row["log"] = log.name
+            row["interrupted"] = reclaimed
+            if q is not None:
+                row["query"] = q
+                # Which turn it took in the boot, so a list that repeats a
+                # query ("1 1") stays two distinguishable rows.
+                row["query_seq"] = seq
+            # The serial console is not line-atomic: a kernel message can land
+            # on top of the "Qnn: ... ms" line and take the run's only number
+            # with it, leaving a row that completed but measures nothing.
+            # TPCH SUMMARY's ms is the same clock summed over the queries, so
+            # for a single-query run it is that number exactly -- recover it
+            # rather than spend another instance, and record that it was
+            # recovered. With several queries in the boot the sum is not any
+            # one of them, so there is nothing to recover from.
+            if row.get("query_ms") is None and row.get("queries_total") == 1 \
+                    and row.get("summary_ms") is not None:
+                row["query_ms"] = row["summary_ms"]
+                row["query_ms_from_summary"] = True
+            return row
+
+        # One boot can run several queries (BENCH_QUERIES=1,6,9), and each
+        # prints its own `Qnn:` line and its own stats. Cut the log at those
+        # lines so every query gets a row of its own; the trailing summary
+        # falls after the last block and stays out of it.
+        heads = list(re.finditer(r"^Q(\d+): ", text, re.M))
+        if len(heads) <= 1:
+            return finish(parse(text, self.metrics))
+        rows = []
+        for i, h in enumerate(heads):
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+            rows.append(finish(parse(text[h.start():end], self.metrics), int(h.group(1)), i + 1))
+        return rows
 
     def valid(self, row: dict) -> bool:
         if not bool(row.get("complete")):
