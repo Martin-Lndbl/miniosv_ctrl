@@ -1,0 +1,43 @@
+name = "miniosv-sf100-phase"
+title = "DuckDB-on-miniOSv: where a request's time goes, Q01 at sf=100, 256 threads"
+description = """
+The miniOSv half of a measured-split pair at the scale the paper leads with.
+Whether the breakdown is trustworthy at sf=100 is the open question: at sf=10
+the two arms' bar heights come from two different query executions minutes
+apart, and the run-to-run spread there (-16% to +22%, one rep 4x) swamps any
+systematic instrumentation cost.
+
+This arm needs no instrumentation -- the per-request stats are always on -- so
+its bar is a clean run. Run it with linux-sf100-phase --concurrent so the two
+arms see the same S3 minute:
+
+    just queue miniosv-sf100-phase linux-sf100-phase --concurrent
+    just breakdown results/tpch/miniosv-sf100-phase.csv \
+        --linux results/tpch/linux-sf100-phase.csv --out results/tpch/sf100-phase.png
+
+No target_ip: both arms resolve by default since 2026-09-28, and a pin costs
+~6% (Q01 sf=100 9025 resolved against 9646 pinned).
+"""
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.16xlarge"
+axis     = "query"
+grid     = { query = [1] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[fixed]
+sf      = "100"
+workers = 8
+conns   = 32
+threads = 256
+
+[env]
+BENCH_NOTE = "miniOSv"

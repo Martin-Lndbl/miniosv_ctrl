@@ -10,14 +10,30 @@ before.
 
     just plot results/tpch/miniosv-sf100-query-16xl.csv results/tpch/linux-sf100-query-16xl.csv \\
         --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+
+Each query runs three times in a row in one boot -- cold, heated, warm --
+distinguished by `query_seq`. Turn 3 is the steady state; turn 1 is only
+genuinely cold for Q01, because every TPC-H query reads overlapping lineitem
+ranges and the first query of the boot warms them for the rest. The turn-1
+numbers are recorded, not used.
+
+Why they differ at all: on sf=1 the same query run twice, same connections,
+same bytes, was 37% quicker the second time on miniOSv and 26% on Linux, and
+the cause is S3's own first-byte time falling 42 -> 24 ms on objects it has
+just served. DuckDB's caches are off (enable_external_file_cache=false, and
+identical body_bytes across turns proves it); mininet's connection counters
+are identical across turns too, so it is not connection warmth.
+
+One boot for all 66 turns instead of one instance per query: spot, not
+compute, is the binding constraint -- c6in.16xlarge scores 1 of 10 in every
+AWS region -- and a whole rep is minutes of query time inside the vm cap.
 """
 bench    = "competitors/duckdb-linux"
 instance = "c6in.16xlarge"
 axis     = "query"
-grid     = { query = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] }
-reps     = 2
+reps     = 3
 cooldown = 0
-max_vm_seconds = 900
+max_vm_seconds = 1800
 keep_going = true
 
 
@@ -26,6 +42,9 @@ ylabel    = "Query latency (ms)"
 unit      = "ms"
 series    = "note"
 box       = true
+
+[[points]]
+query = "1 1 1 2 2 2 3 3 3 4 4 4 5 5 5 6 6 6 7 7 7 8 8 8 9 9 9 10 10 10 11 11 11 12 12 12 13 13 13 14 14 14 15 15 15 16 16 16 17 17 17 18 18 18 19 19 19 20 20 20 21 21 21 22 22 22"
 
 [fixed]
 sf      = "100"
