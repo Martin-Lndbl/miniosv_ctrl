@@ -1,0 +1,48 @@
+name = "miniosv-http-200g-jumbo"
+title = "HTTP (no TLS): the 200 Gbps core sweep again, with jumbo frames"
+description = """
+The miniOSv line of the 200G figure, re-measured at MTU 9001. Identical to
+miniosv-http-200g in every knob -- same instance, same 8/16/24/32 workers, 64
+connections, 128 MiB blocks, 50 GiB blob, one rep, front-end resolved per
+worker -- so the only difference is the build's frame size and the two lines
+overlay on the same axis.
+
+Why it matters: the figure currently puts miniOSv at 1500 against Linux at
+9001, which its own caption admits prices the constraint rather than the
+stacks. At 8 workers that reads 63.6 Gbps against 136.9. With jumbo the
+comparison is finally at equal frame size.
+
+Where the gain should be: at 24 and 32 workers both arms already sit on the
+~150-160 Gbps endpoint ceiling, so frame size cannot show there. 8 and 16 are
+the informative points.
+
+Measured first on c6in.large, 2 workers, 3 reps a side: 1504 -> 7511 B a
+frame, in-poll work 1004.6 -> 771.0 ns/KiB, frames 16.50 -> 21.86 Gbps.
+S3 caps its own segments at 8228 B of payload -- Linux advertises 8949 on a
+9001 path MTU and still receives no more -- so 8294 B a frame is the ceiling
+for both stacks, not a miniOSv shortfall.
+
+**Read `over 1514` on every run.** The guest resolves per worker and S3's
+front-ends do not agree about jumbo (52.95.169.76 served nothing above 1514
+while 3.5.217.108 served 7962 B frames, on both stacks), so a low jumbo
+fraction here means the run drew bad front-ends, not that jumbo failed.
+Deliberately left unpinned to match the arm it replaces.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [8, 16, 24, 32] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+
+[fixed]
+conns = 64
+block = "128M"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "miniOSv jumbo, 200G"

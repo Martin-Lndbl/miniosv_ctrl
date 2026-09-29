@@ -431,6 +431,65 @@ def report_counters(before, after):
 
 # ---------------------------------------------------------------------------
 
+def frame_probe():
+    """What S3 offers on the wire, read off a live socket instead of inferred.
+
+    An average frame size cannot tell "S3 caps its own segments" apart from
+    "we advertised too small an MSS". `ss -ti` can: it reports the path MTU the
+    kernel settled on, `advmss` (what this host offered in its SYN) and
+    `rcvmss` -- the largest segment it has actually received. rcvmss is the
+    ceiling miniOSv's frames should be measured against.
+    """
+    import socket
+    import threading
+    rule("frame probe")
+    ip = cfg("AWS_TARGET_IP")
+    if not ip:
+        try:
+            ip = socket.gethostbyname("{}.s3.{}.amazonaws.com".format(BUCKET, REGION))
+        except OSError as e:
+            say("skipped: cannot resolve ({})".format(e))
+            return
+    say("front-end    : " + ip)
+    say("route        : " + " ".join(run("ip", "route", "get", ip).split()))
+
+    # A GET big enough to stay open while ss is sampled, through the gateway
+    # endpoint exactly as the bench does.
+    url = ENDPOINT + "/blob.bin"
+    req = urllib.request.Request(url, headers={"Range": "bytes=0-536870911"})
+    err = []
+
+    def pull():
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                while r.read(1 << 20):
+                    pass
+        except Exception as e:          # noqa: BLE001 - a probe, never fatal
+            err.append(repr(e))
+
+    t = threading.Thread(target=pull, daemon=True)
+    t.start()
+    best = {}
+    for _ in range(12):
+        time.sleep(0.5)
+        out = run("ss", "-tin", "state", "established",
+                  "( dport = :80 or dport = :443 )")
+        for key in ("pmtu", "advmss", "rcvmss", "mss"):
+            for m in re.finditer(r"\b{}:(\d+)".format(key), out):
+                v = int(m.group(1))
+                if v > best.get(key, 0):
+                    best[key] = v
+        if len(best) == 4:
+            break
+    for key in ("pmtu", "advmss", "rcvmss", "mss"):
+        show(key, best.get(key, "not seen"))
+    if "rcvmss" in best:
+        say("   largest segment S3 sent: {} B payload -> {} B frame"
+            .format(best["rcvmss"], best["rcvmss"] + 14 + 20 + 20))
+    if err:
+        say("   probe GET: " + err[0])
+
+
 def fetch_binary():
     rule("fetch")
     local_bin = cfg("BENCH_BIN")
@@ -517,6 +576,8 @@ def main():
             say()
             say("   kept         delayed ACK, rmem autotuning, no busy poll")
             say("   removed      GRO and jumbo")
+
+        frame_probe()
 
         if not fetch_binary():
             return 1
