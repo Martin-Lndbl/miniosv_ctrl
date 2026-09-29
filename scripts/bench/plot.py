@@ -104,9 +104,14 @@ def rank(axis: str, v, order: dict | None = None) -> float:
     return float(order[v]) if order else 0.0
 
 
-def tick(axis: str, v) -> str:
+def tick(axis: str, v, *, axis_of_plot: bool = True) -> str:
+    """Format one value. `axis_of_plot` is False where the value is a knob
+    held constant rather than a tick: an instance sweep drops the family from
+    every tick because they all share it and it is noise repeated 6 times,
+    but "instance=18xlarge" in the subtitle has lost the only part that says
+    which machine."""
     if axis == "instance":
-        return str(v).split(".", 1)[-1]
+        return str(v).split(".", 1)[-1] if axis_of_plot else str(v)
     if axis == "block":
         return f"{int(v) >> 20}M"
     return f"{float(v):g}" if numeric(v) else str(v)
@@ -214,6 +219,18 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
     # repeats its earlier shape.
     n_hue = len(c["series"])
     handles: list = []
+    # With many categories and a box per series dodged inside each, a box
+    # floats between ticks with nothing tying it to one. A band behind every
+    # other category bounds the column so the eye can follow it down to the
+    # label -- cheaper to read than gridlines, and it does not compete with
+    # the marks. Bars do not need it: they sit shoulder to shoulder, so a
+    # group reads as a group already.
+    if named and box and len(order) > 6:
+        for i in range(0, len(order), 2):
+            ax.axvspan(i - 0.5, i + 0.5, color=c["grid"], alpha=0.35,
+                       lw=0, zorder=0)
+        ax.set_xlim(-0.5, len(order) - 0.5)
+
     if box:
         # Every valid rep as its own box, rather than the mean and range
         # summarise() computes: with a handful of reps the shape of the
@@ -265,10 +282,13 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
                    hatch=HATCH[shape % len(HATCH)],
                    edgecolor=c["surface"], linewidth=0.8, label=name, zorder=3)
             # Above the whisker (hi), not the bar -- else the label sits
-            # inside the yerr line.
-            for xi, v, hi in zip(pos, g["mean"], g["hi"]):
-                ax.annotate(f"{v:.1f}", (xi, hi), textcoords="offset points",
-                            xytext=(0, 3), ha="center", fontsize=7.5, zorder=4)
+            # inside the yerr line. Only while they are still readable: the
+            # 22-query suite draws 44 bars and the numbers become a band of
+            # text across the middle of the plot, worse than the axis.
+            if len(order) * len(groups) <= 12:
+                for xi, v, hi in zip(pos, g["mean"], g["hi"]):
+                    ax.annotate(f"{v:.1f}", (xi, hi), textcoords="offset points",
+                                xytext=(0, 3), ha="center", fontsize=7.5, zorder=4)
     else:
         for i, (name, g) in enumerate(groups):
             col = c["series"][i % n_hue]
@@ -348,7 +368,8 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
         else "{} · mean of " + str(reps) + " runs, band is min–max"
     )
     fixed = ", ".join(
-        f"{k}={tick(k, df[k].iloc[0])}" for k in LABELS if k in df and k != axis
+        f"{k}={tick(k, df[k].iloc[0], axis_of_plot=False)}"
+        for k in LABELS if k in df and k != axis
     )
     spread = spread.format(fixed)
     if facet is not None:
