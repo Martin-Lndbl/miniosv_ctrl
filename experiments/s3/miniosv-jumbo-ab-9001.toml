@@ -1,0 +1,44 @@
+name = "miniosv-jumbo-ab-9001"
+title = "Jumbo A/B on c6in.large: what frame size is worth at a fixed 2-core budget (MTU 9001)"
+description = """
+The pair miniosv-jumbo-ab-9001 / miniosv-jumbo-ab-1500. A **source** A/B: the
+only difference between the two arms is the three constants that carry the
+frame size (minidpdk's kMaxDataLen, the pool's DATA_ROOM_SIZE, smoltcp's MTU),
+so each arm is its own build and they must be run one after the other.
+
+Why c6in.large can price this even though it is burstable: measured 2026-09-29,
+2 workers move ~20 Gbps of frames at 9001 and the box bursts to 25, so the
+workers are the limit rather than the line. The per-worker evidence is in the
+bring-up run -- one worker on a jumbo front-end finished its 2 GiB in 2.2 s
+while the other, on a front-end that would not go past 1500, took 4.4 s.
+
+The metric is **WORK ... ns/KiB**, time actually spent inside poll per KiB
+received. The bench's own cpu_s is workers x wall by construction -- a
+busy-polling worker holds its cpu whether a frame is there or not -- so it
+cannot show a per-byte saving. ns/KiB can, and it keeps its meaning even if the
+line, not the cpu, ends up capping throughput.
+
+**Pinned front-end, and it must be the same one in both arms.** S3's
+52.95.169.0/24 front-ends were measured serving 1500-byte frames while
+3.5.216.0/22 serves jumbo, and the guest resolves per worker, so an unpinned
+pair would compare front-end lotteries instead of frame sizes.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.large"
+axis     = "conns"
+grid     = { conns = [16] }
+reps     = 3
+cooldown = 0
+max_vm_seconds = 600
+target_ip = "3.5.217.108"
+
+[fixed]
+workers = 2
+block   = "128M"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "miniOSv MTU 9001"
