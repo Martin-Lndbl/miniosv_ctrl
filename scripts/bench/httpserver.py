@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import atexit
 import gzip
+import ipaddress
 import json
 import os
 import re
+import subprocess
 import time
 from pathlib import Path
 
@@ -27,6 +29,7 @@ from botocore.exceptions import ClientError
 import runner
 from runner import ROOT, ec2
 
+BIN_PREFIX = "bin/nginx-static"   # competitors/nginx-static/justfile
 SSM_AMI = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
 SCRIPT = ROOT / "competitors/nginx-static/scripts/server.py"
 TAG = "miniosv-nginx-server"  # under the queue's miniosv-* glob
@@ -49,6 +52,102 @@ def spot_ranked_zones(c, instance: str) -> list[str]:
     except ClientError as e:
         print(f"    spot placement scores unavailable ({e.response.get('Error', {}).get('Code')}); subnet order", flush=True)
     return names
+
+
+def verify_external(target_ip: str | None, zone: str | None) -> None:
+    """Check a long-living server is where the run is about to assume it is.
+
+    A server launched per point put its own `zone` in the row, read off the
+    object that launched it. Dialling a long-living one, the zone is whatever
+    BENCH_ZONE says -- an assertion, not an observation -- so a stale or
+    mistyped value pins the client to it *and* records the same string. The
+    same-AZ check then compares a claim with itself, passes, and the traffic
+    crosses an AZ at $0.01/GB each way. A public target is worse: the internet
+    gateway bills $0.09/GB and both ends really are in one zone, so nothing
+    downstream notices at all.
+
+    So this resolves the claims against the instance itself, before anything
+    launches. It only fires for a private target -- an S3 front-end is public
+    and is not ours to check.
+    """
+    if not target_ip:
+        return
+    try:
+        private = ipaddress.ip_address(target_ip).is_private
+    except ValueError:
+        raise SystemExit(f"--target-ip {target_ip!r} is not an address")
+
+    state = ROOT / "results" / "http" / "nginx-server.json"
+    try:
+        rec = json.loads(state.read_text())
+    except (OSError, ValueError):
+        rec = None
+
+    if not private:
+        if rec:
+            print(f"    WARN: dialling public {target_ip} while {rec['iid']} is recorded as our "
+                  f"nginx at {rec['ip']} -- egress over the internet gateway bills $0.09/GB", flush=True)
+        return
+
+    if not rec:
+        raise SystemExit(
+            f"--target-ip {target_ip} is private but no long-living server is recorded.\n"
+            f"  start one with scripts/bench/nginx-server.py start, or pass the type as `server`.")
+
+    try:
+        inst = ec2().describe_instances(InstanceIds=[rec["iid"]])["Reservations"][0]["Instances"][0]
+    except Exception as e:
+        raise SystemExit(f"cannot read the recorded server {rec['iid']}: {e}")
+
+    state_name = inst["State"]["Name"]
+    real_ip, real_zone = inst.get("PrivateIpAddress"), inst["Placement"]["AvailabilityZone"]
+    if state_name != "running":
+        raise SystemExit(f"the recorded nginx {rec['iid']} is {state_name}, not running")
+    if real_ip != target_ip:
+        raise SystemExit(f"--target-ip {target_ip} is not {rec['iid']} (that instance is {real_ip})")
+    if not zone:
+        raise SystemExit(f"BENCH_ZONE is unset; {rec['iid']} is in {real_zone} and the client must be pinned there")
+    if zone != real_zone:
+        raise SystemExit(
+            f"BENCH_ZONE={zone} but {rec['iid']} is in {real_zone}: the client would be pinned to the "
+            f"wrong zone and every byte billed at $0.01/GB each way")
+    print(f"    preflight: nginx {rec['iid']} running at {real_ip} in {real_zone}, client pinned there", flush=True)
+
+
+_BIN_READY = False
+
+
+def ensure_binary() -> None:
+    """Upload competitors/nginx-static if the bucket has no nginx.
+
+    The client benches get this for free -- `Bench.build` shells out to
+    `just setup <bench>` -- but the server is launched by the *client's* driver
+    and nothing was building it. A bucket that had never had a
+    `just setup competitors/nginx-static` (a fresh one, or one from before a
+    region move) therefore produced a server whose user-data died on
+    `HTTP Error 403: Forbidden` fetching bin/nginx-static/nginx, reported only
+    as "nginx server never became ready". Checked once a process, and the
+    upload is skipped when the object is already there.
+    """
+    global _BIN_READY
+    if _BIN_READY:
+        return
+    key = f"{BIN_PREFIX}/nginx"  # matches competitors/nginx-static/justfile
+    try:
+        boto3.client("s3", region_name=os.environ["AWS_REGION"]).head_object(
+            Bucket=os.environ["AWS_BUCKET"], Key=key)
+        _BIN_READY = True
+        return
+    except ClientError:
+        pass
+    print(f"    s3://{os.environ['AWS_BUCKET']}/{key} missing; just setup competitors/nginx-static",
+          flush=True)
+    r = subprocess.run(["just", "setup", "competitors/nginx-static"],
+                       cwd=ROOT, capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f"nginx-static setup failed:\n{r.stdout}\n{r.stderr}")
+    print("    " + "\n    ".join(r.stdout.strip().splitlines()[-3:]), flush=True)
+    _BIN_READY = True
 
 
 class HttpServer:
@@ -74,6 +173,7 @@ class HttpServer:
         return gzip.compress(f"#!/usr/bin/env python3\nCONFIG = {json.dumps(conf)}\n{body}".encode())
 
     def start(self) -> str:
+        ensure_binary()
         ami = boto3.client("ssm", region_name=os.environ["AWS_REGION"]).get_parameter(Name=SSM_AMI)["Parameter"]["Value"]
         c = ec2()
         kwargs = dict(

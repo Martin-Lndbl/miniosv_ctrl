@@ -116,6 +116,23 @@ def match_mininet(iface):
         "quickack" if "quickack" in run("ip", "route", "show", "default") else "no quickack"))
 
 
+def gro_off(iface):
+    """Receive aggregation removed and nothing else -- the MTU stays at 9001.
+
+    `parity` drops to 1500 as well, which was the honest wire while minidpdk's
+    mbuf data room was a constexpr 1536. It is 9216 since 2026-09-29 and the
+    unikernel negotiates a 9001 MTU, so the comparable Linux client is the core
+    budget with GRO off and the frame size left alone. Combine with `cpus`.
+    """
+    mtu = read("/sys/class/net/{}/mtu".format(iface))
+    say("nogro        : GRO off, mtu {} left alone".format(mtu))
+    run("ethtool", "-K", iface, "gro", "off")
+    run("ethtool", "-K", iface, "lro", "off")
+    gro = [l for l in run("ethtool", "-k", iface).splitlines()
+           if l.startswith("generic-receive-offload")]
+    say("             : {}, mtu {}".format(gro[0] if gro else "gro unknown", mtu))
+
+
 def cap_cores(iface, n):
     """As competitors/linux-s3's capped mode does it: irqbalance off, one
     channel per core of the budget, IRQs and XPS on those cores. wrk itself is
@@ -228,6 +245,8 @@ def main():
         say("=== bench ===")
         if MODE == "parity":
             match_mininet(iface)
+        elif MODE == "nogro":
+            gro_off(iface)
         elif MODE != "stock":
             say("WARNING: unknown MODE={} — running as stock".format(MODE))
         if CPUS:

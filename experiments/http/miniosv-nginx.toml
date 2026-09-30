@@ -1,37 +1,52 @@
 name = "miniosv-nginx"
-title = "miniOSv against a static nginx: plain HTTP ranged GETs, a connection per block"
+title = "miniOSv against a static nginx: throughput against workers, ranges from a shared pool"
 description = """
-The miniOSv arm of the wrk head-to-head (2026-09-27): the first of the
-network-stack benchmarks, the one where the roles match, since mininet is an
-HTTP load generator and so is wrk. Each point launches its own nginx on the
-instance type `server` names (competitors/nginx-static: one static binary, a
-10 GiB blob in tmpfs, stock AL2023 otherwise); the image then dials it over
-plain HTTP with 8 workers x 16 connections, 128 MiB blocks, one connection per
-block, 256 blocks per worker so a run lasts about a minute at line rate. The
-other arm, wrk-nginx, is wrk on Linux with the same shape against its own
-identical server. Run them together:
+The miniOSv half of the nginx head-to-head, paired with wrk-nginx. Our own
+server, so unlike the S3 sweeps there is no front-end lottery: nginx serves
+every worker the same 9014-byte frames, and what the curve shows is the stack.
 
-    just queue http/miniosv-nginx,http/wrk-nginx --concurrent
-    just plot results/http/miniosv-nginx.csv results/http/wrk-nginx.csv --series note
+Shape, and why each number. **conns=64** a worker is what the 200G sweep
+settled on: at 16 the first attempt moved 32 GiB in 2.8 s and ramp-up and drain
+dominated the aggregate. **blocks=256** because the shared pool only acts when
+blocks exceed conns -- at the default 0 every slot dials once, the pool is
+empty after the initial dial and a slow worker still holds the run open. 256
+against 64 gives four refill rounds a slot at every point on the axis.
+**block=32M** keeps 8 GiB a worker, so the run grows with the axis (16 GiB at
+2 workers, 256 GiB at 32) instead of finishing before it reaches steady state.
+
+Measured 2026-09-30 on c6in.large at this shape: the pool took the spread
+between the first and last worker to finish from 31.4% of the run to 1.7%, and
+throughput from 21.6 to 24.3 Gbps, against a server with no asymmetry at all.
+That is the drain that is the stack's own rather than S3's.
+
+Both ends are r6in.32xlarge: a 50 Gbps server would cap a client that reached
+174 Gbps of frames against S3. Two of them is 256 of the 300 spot vCPUs the
+account allows, so a point will refuse while a previous instance is still
+shutting down -- retry rather than reading it as scarcity.
 """
 
 bench    = "apps/bench/smoltcp-s3"
-instance = "c6in.8xlarge"
-axis     = "conns"
-grid     = { conns = [16] }
-reps     = 3
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [2, 4, 8, 16, 32] }
+reps     = 2
 cooldown = 0
-max_vm_seconds = 400
+max_vm_seconds = 900
 
 [fixed]
-workers = 8
-block   = "128M"
-blocks  = 256
-server  = "c6in.8xlarge"
+conns  = 64
+blocks = 256
+block  = "32M"
+# A type here launches an nginx of its own per point, which is what makes
+# `just reproduce` work on its own. For a sweep a long-living server is
+# cheaper and stops the two fighting for spot quota:
+#     scripts/bench/nginx-server.py start --client r6in.32xlarge
+#     BENCH_ZONE=<its zone> just reproduce <this> --target-ip <its ip>
+# with this set to "" so the point does not launch one as well.
+server = "r6in.32xlarge"
 
 [env]
 BENCH_SCHEME    = "http"
 BENCH_TLS_STUB  = "0"
-AWS_BUCKET_SIZE = "10G"
-BENCH_ZONES     = "eu-north-1c,eu-north-1b,eu-north-1a"  # 1a refused every c6in.8xlarge spot request on 2026-09-27
+AWS_BUCKET_SIZE = "50G"
 BENCH_NOTE      = "miniOSv"

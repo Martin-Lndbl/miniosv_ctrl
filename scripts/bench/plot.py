@@ -121,7 +121,12 @@ def summarise(df: pd.DataFrame, series_col: str | None, value_col: str):
     """One row per (series, axis value): mean over valid reps, plus spread."""
     keys = ([series_col] if series_col else []) + ["axis_value"]
     g = df[df["valid"]].groupby(keys)[value_col]
-    out = g.agg(mean="mean", lo="min", hi="max", n="count").reset_index()
+    # std alongside the min-max: with two reps the band is just the two points,
+    # so a whisker at +-1 sd is the honest way to show how far apart they were.
+    # ddof=0 -- these are the reps we have, not a sample of a larger population,
+    # and ddof=1 on n=1 is NaN, which matplotlib draws as a missing whisker.
+    out = g.agg(mean="mean", lo="min", hi="max", n="count", std=lambda x: x.std(ddof=0)).reset_index()
+    out["std"] = out["std"].fillna(0.0)
     axis = str(df["axis"].iloc[0])
     order = {v: i for i, v in enumerate(dict.fromkeys(df["axis_value"]))}
     return out.sort_values("axis_value", key=lambda c: c.map(lambda v: rank(axis, v, order)))
@@ -143,6 +148,11 @@ def plot(
     facet_col: str | None = None,
     hline: float | None = None,
     hline_label: str | None = None,
+    whiskers: bool = False,
+    xlabel: str | None = None,
+    subtitle: bool = True,
+    legend_loc: str = "best",
+    legend_anchor: tuple[float, float] | None = None,
 ) -> None:
     c = INK[mode]
     if x_col:
@@ -157,7 +167,9 @@ def plot(
     for i, (ax, (facet, fdf)) in enumerate(zip(axes[0], facets)):
         draw(ax, fdf, c, i == 0, facet, facet_col, series_col, title, value_col, ylabel,
              unit, bar, log_scale, box, top, named=bool(x_col),
-             hline=hline, hline_label=hline_label)
+             hline=hline, hline_label=hline_label, whiskers=whiskers,
+             xlabel=xlabel, subtitle=subtitle, legend_loc=legend_loc,
+             legend_anchor=legend_anchor)
     if facet_col:
         handles, labels = axes[0][0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", ncol=len(labels), bbox_to_anchor=(0.5, -0.12),
@@ -169,7 +181,8 @@ def plot(
 
 
 def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabel, unit,
-         bar, log_scale, box, top, named=False, hline=None, hline_label=None):
+         bar, log_scale, box, top, named=False, hline=None, hline_label=None, whiskers=False,
+         xlabel=None, subtitle=True, legend_loc="best", legend_anchor=None):
     axis = str(df["axis"].iloc[0])
     instance = str(df["instance"].iloc[0])
     stats = summarise(df, series_col, value_col)
@@ -296,9 +309,15 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
         for i, (name, g) in enumerate(groups):
             col = c["series"][i % n_hue]
             shape = (i + i // n_hue) % n_hue
-            ax.fill_between(
-                xof(g["axis_value"]), g["lo"], g["hi"], color=col, alpha=0.18, lw=0, zorder=2
-            )
+            if whiskers:
+                ax.errorbar(
+                    xof(g["axis_value"]), g["mean"], yerr=g["std"], fmt="none",
+                    ecolor=col, elinewidth=1.4, capsize=4, capthick=1.4, zorder=2,
+                )
+            else:
+                ax.fill_between(
+                    xof(g["axis_value"]), g["lo"], g["hi"], color=col, alpha=0.18, lw=0, zorder=2
+                )
             ax.plot(
                 xof(g["axis_value"]),
                 g["mean"],
@@ -376,7 +395,7 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
                 color=c["muted"],
             )
 
-    ax.set_xlabel(LABELS.get(axis, axis))
+    ax.set_xlabel(xlabel or LABELS.get(axis, axis))
     if first:
         ax.set_ylabel(ylabel)
     reps = int(stats["n"].max())
@@ -385,7 +404,8 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
     spread = (
         f"{{}} · box is quartiles over {reps} runs, dots are the runs"
         if box
-        else "{} · mean of " + str(reps) + " runs, band is min–max"
+        else ("{} · mean of " + str(reps) + " runs, whiskers are ±1 sd" if whiskers
+              else "{} · mean of " + str(reps) + " runs, band is min–max")
     )
     fixed = ", ".join(
         f"{k}={tick(k, df[k].iloc[0], axis_of_plot=False)}"
@@ -395,13 +415,16 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
     if facet is not None:
         ax.set_title(f"{LABELS.get(facet_col, facet_col)} {tick(facet_col, facet)}", fontsize=10)
     else:
-        ax.set_title(title or f"{ylabel.split(' (')[0]} vs {axis}")
+        if title != "":
+            ax.set_title(title or f"{ylabel.split(' (')[0]} vs {axis}")
     if first and facet is None:
-        ax.text(0, 1.02, (spread if named else f"{instance} · {spread}"),
-                transform=ax.transAxes, fontsize=8.5, color=c["muted"])
+        if subtitle:
+            ax.text(0, 1.02, (spread if named else f"{instance} · {spread}"),
+                    transform=ax.transAxes, fontsize=8.5, color=c["muted"])
         if handles or ax.get_legend_handles_labels()[0]:
-            ax.legend(handles=handles or None, labelcolor=c["text"])
-    elif first:
+            ax.legend(handles=handles or None, labelcolor=c["text"], loc=legend_loc,
+                      **({"bbox_to_anchor": legend_anchor} if legend_anchor else {}))
+    elif first and subtitle:
         ax.figure.text(0.01, -0.04, f"{instance} · {spread}", fontsize=8.5, color=c["muted"])
 
 
@@ -445,6 +468,21 @@ def main() -> int:
              "CEILING table cannot express as an instance's sustained figure",
     )
     ap.add_argument("--hline-label", default=None, help="text for --hline")
+    ap.add_argument("--xlabel", default=None, help="x-axis label instead of the knob's name")
+    ap.add_argument(
+        "--no-subtitle", action="store_true",
+        help="drop the line above the axes naming the instance and the fixed knobs",
+    )
+    ap.add_argument("--legend-loc", default="best", help="matplotlib legend location")
+    ap.add_argument(
+        "--legend-anchor", default=None, metavar="X,Y",
+        help="axes-fraction point the legend's --legend-loc corner is placed at, "
+             "e.g. 0,0.89 to hang it under an --hline at 200 of a 224 axis",
+    )
+    ap.add_argument(
+        "--whiskers", action="store_true",
+        help="error bars at ±1 sd instead of a min–max band; clearer with few reps",
+    )
     ap.add_argument(
         "--box", action="store_true",
         help="a box per rep-set instead of a mean with a range; use when the "
@@ -466,7 +504,9 @@ def main() -> int:
     mode = "dark" if a.dark else "light"
     out = a.out or a.csv.with_name(f"{a.csv.stem}{'-dark' if a.dark else ''}.png")
     plot(df, out, mode, a.series, a.title, a.value_col, a.ylabel, a.unit,
-         a.bar, a.log_scale, a.box, a.x, a.facet, a.hline, a.hline_label)
+         a.bar, a.log_scale, a.box, a.x, a.facet, a.hline, a.hline_label, a.whiskers,
+         a.xlabel, not a.no_subtitle, a.legend_loc,
+         tuple(float(v) for v in a.legend_anchor.split(",")) if a.legend_anchor else None)
     valid = int(df["valid"].sum())
     print(f"wrote {out} ({valid}/{len(df)} runs valid)")
     return 0

@@ -230,11 +230,37 @@ def terminate(c, ids: list[str]) -> None:
             if s.get("State") in ("open", "active")
         ]
     except ClientError:
-        return
+        # Listing the requests failed; the instances were still asked to
+        # terminate, so fall through to the wait rather than returning and
+        # leaving the next launch to be refused on quota.
+        sirs = []
     if sirs:
         with contextlib.suppress(ClientError):
             c.cancel_spot_instance_requests(SpotInstanceRequestIds=sirs)
 
+    # Not waiting for `terminated`: with the quota raised, the next launch does
+    # not need these cores back, and blocking here delays the row by 1-2 min.
+    # `wait_gone` stays for callers that do need it -- nginx-server.py stop.
+
+
+def wait_gone(c, ids: list[str], timeout_s: int = 240) -> bool:
+    """Block until every id is `terminated`. True if they all got there."""
+    ids = [i for i in ids if i]
+    deadline = time.time() + timeout_s
+    while ids and time.time() < deadline:
+        try:
+            got = c.describe_instances(InstanceIds=ids)["Reservations"]
+        except ClientError:
+            return True  # already gone as far as the API is concerned
+        live = [
+            inst["InstanceId"]
+            for r in got for inst in r["Instances"]
+            if inst["State"]["Name"] not in ("terminated", "stopped")
+        ]
+        if not live:
+            return True
+        time.sleep(3)
+    return False
 
 def sweep_spot_requests(c) -> int:
     """Cancel active spot requests whose instance is gone, and say how many.

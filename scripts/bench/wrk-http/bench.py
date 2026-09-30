@@ -18,6 +18,7 @@ HERE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 
 import runner  # noqa: E402
+import httpserver
 from httpserver import HttpServer  # noqa: E402
 from runner import ROOT, size  # noqa: E402
 
@@ -39,6 +40,12 @@ class WrkHttp(LinuxS3):
     knobs = {
         "threads": ("BENCH_THREADS", int),
         "conns": ("BENCH_CONNS", int),  # total, spread over the threads
+        # Depth per core, so the in-flight count tracks the axis the way the
+        # unikernel's does (its conns are per worker). 0 keeps `conns` as a
+        # flat total. Matching matters: a fixed 2048 gave wrk 16x miniOSv's
+        # depth at cpus=2 -- deep enough that 14 requests timed out and the
+        # point was discarded, while at cpus=32 it was the only fair value.
+        "conns_per_cpu": ("BENCH_CONNS_PER_CPU", int),
         "duration": ("BENCH_DURATION", int),
         "block": ("BENCH_BLOCK_SIZE", size),
         # "1": Connection: close on every request, the smoltcp-s3 arm's shape.
@@ -50,7 +57,7 @@ class WrkHttp(LinuxS3):
         # The nginx instance type; launched once per point.
         "server": ("BENCH_SERVER", str),
     }
-    defaults = {"threads": 8, "conns": 128, "duration": 30, "block": 128 << 20, "close": "1", "server": "c6in.8xlarge",
+    defaults = {"threads": 8, "conns": 128, "conns_per_cpu": 0, "duration": 30, "block": 128 << 20, "close": "1", "server": "c6in.8xlarge",
                 "cpus": 0, "mode": "stock"}
     instance_tag = "miniosv-wrk-bench"
     default_instance = "c6in.8xlarge"
@@ -84,6 +91,14 @@ class WrkHttp(LinuxS3):
 
     def build(self, cfg: dict, ip: str) -> None:
         super().build(cfg, ip)  # just setup competitors/wrk-http
+        if not cfg.get("server"):
+            httpserver.verify_external(ip, os.environ.get("BENCH_ZONE"))
+            # A long-living server (scripts/bench/nginx-server.py) dialled by
+            # --target-ip. Launching one a point costs a second r6in.32xlarge
+            # against the same 300-vCPU spot quota the client needs, and a
+            # refused client leaves its own server draining to refuse the retry.
+            self.zone = os.environ.get("BENCH_ZONE") or None
+            return
         if self.server:
             self.server.stop()
         self.server = HttpServer(str(cfg["server"]), os.environ.get("BENCH_SERVER_MARKET", "spot"),
@@ -94,13 +109,18 @@ class WrkHttp(LinuxS3):
 
     def user_data(self, cfg: dict, ip: str, run_id: str) -> str:
         import json
-        assert self.server and self.server.ip
+        target = self.server.ip if self.server else ip
+        assert target
         conf = {
             "AWS_BUCKET": os.environ["AWS_BUCKET"],
             "AWS_REGION": os.environ["AWS_REGION"],
-            "AWS_TARGET_IP": self.server.ip,
+            "AWS_TARGET_IP": target,
             "BENCH_THREADS": str(cfg["threads"]),
-            "BENCH_CONNS": str(cfg["conns"]),
+            # cpus=0 means "the machine as shipped", where there is no core
+            # budget to scale against, so the flat total stands.
+            "BENCH_CONNS": str(cfg["conns_per_cpu"] * cfg["cpus"]
+                               if cfg.get("conns_per_cpu") and cfg.get("cpus")
+                               else cfg["conns"]),
             "BENCH_DURATION": str(cfg["duration"]),
             "BENCH_BLOCK_SIZE": str(cfg["block"]),
             "BENCH_OBJECT_SIZE": str(size(os.environ.get("AWS_BUCKET_SIZE", "10G"))),
@@ -114,9 +134,15 @@ class WrkHttp(LinuxS3):
         return "#!/usr/bin/env python3\nCONFIG = {}\n{}".format(json.dumps(conf), body)
 
     def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
-        assert self.server and self.server.ip
-        row = super().run_once(instance, logdir, cfg, self.server.ip)
-        row["server_id"], row["server_zone"], row["target_ip"] = self.server.iid, self.server.zone, self.server.ip
+        target = self.server.ip if self.server else ip
+        assert target
+        row = super().run_once(instance, logdir, cfg, target)
+        if self.server:
+            row["server_id"], row["server_zone"], row["target_ip"] = self.server.iid, self.server.zone, self.server.ip
+        else:
+            # Long-living server: the zone still has to reach the row, or the
+            # same-AZ check is blind and a cross-AZ pair bills unnoticed.
+            row["server_zone"], row["target_ip"] = os.environ.get("BENCH_ZONE", ""), target
         return row
 
     def valid(self, row: dict) -> bool:

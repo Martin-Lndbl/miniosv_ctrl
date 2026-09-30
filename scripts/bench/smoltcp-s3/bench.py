@@ -23,6 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import runner  # noqa: E402
+import httpserver
 from httpserver import HttpServer  # noqa: E402
 from runner import COMMON_METRICS, ROOT, Bench, ec2, parse, size  # noqa: E402
 
@@ -71,6 +72,8 @@ class SmoltcpS3(Bench):
         """Bake this point's constants in; build.rs marks each knob
         rerun-if-env-changed so cargo rebuilds when one moves. Must run inside
         the devshell, whose `set -a; . .env` shellHook would otherwise win."""
+        if not cfg.get("server"):
+            httpserver.verify_external(ip, os.environ.get("BENCH_ZONE"))
         if cfg.get("server"):
             # Not S3: this point's own nginx, dialled by address like a front-end.
             if self.server:
@@ -105,6 +108,12 @@ class SmoltcpS3(Bench):
         row = self._run_once(instance, logdir, cfg, ip)
         if self.server:
             row["server_id"], row["server_zone"], row["target_ip"] = self.server.iid, self.server.zone, self.server.ip
+        elif os.environ.get("BENCH_ZONE"):
+            # A long-living server (scripts/bench/nginx-server.py): there is no
+            # object of ours to read a zone off, but the zone still has to reach
+            # the row or the same-AZ check has nothing to check and a cross-AZ
+            # pair -- billed at $0.01/GB each way -- goes unnoticed.
+            row["server_zone"], row["target_ip"] = os.environ["BENCH_ZONE"], ip
         return row
 
     def _run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
