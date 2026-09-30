@@ -1,0 +1,70 @@
+name = "linux-sf100-suite-r6in"
+title = "DuckDB on Linux: all 22 TPC-H queries at sf=100 on r6in.8xlarge"
+description = """
+The Linux arm of the sf=100 head-to-head, paired with
+miniosv-sf100-suite-r6in. Same instance type, same scale factor, same 22
+queries in the same order, two reps a side.
+
+**threads=128**, four threads a vCPU on this 32-vCPU machine. Swept
+2026-09-30 over the same five queries as the miniOSv arm, one rep a point:
+
+| threads | 64 | **128** | 256 | 512 |
+|---|---|---|---|---|
+| ms over Q1/8/9/13/21 | 49886 | **36502** | 44567 | 68516 |
+
+An interior optimum bracketed by +36.7% and +22.1%, so unlike most margins in
+this pair it is well outside the noise and settled in one run. 32 and 16 were
+prepared but never needed: the rule was to go below 64 only if 64 beat 128,
+and it lost by more than a third. Note that the previous sf=100 suites carried
+256, found on a 72-vCPU machine -- it does not transfer, on ratio or otherwise.
+
+**No `conns` knob on this side, by construction.** httpfs opens connections
+per thread, so Linux has exactly one depth lever where mininet has three.
+That asymmetry is why the two arms are tuned separately instead of being
+forced onto a shared number: each runs at its own best, which is the honest
+comparison.
+
+`gro=off` so that one IP datagram is one wire frame and both stacks are
+counting the same thing -- with GRO on the kernel sees coalesced
+super-packets that mininet has no equivalent of. The MTU stays at the ENA
+default of 9001 on both arms, which is jumbo. `queues` is left empty, the NIC
+as the kernel sets it up: the point is each arm at its own best, not a matched
+core budget, and DuckDB uses the whole machine either way.
+
+Front-ends are left unresolved-by-default on both arms -- see the miniOSv
+arm's note on the front-end lottery and why ~10% is the floor for reading any
+single margin here.
+
+`keep_going` so one failed query is one invalid row. sf=100 has no canned
+answers, so `match` reads unchecked.
+
+    just plot results/tpch/miniosv-sf100-suite-r6in.csv results/tpch/linux-sf100-suite-r6in.csv \\
+        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
+
+S3 cost: ~450k GET requests a rep, so ~\\$0.36 for this arm's two.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf      = "100"
+gro     = "off"
+threads = 128
+
+[env]
+BENCH_NOTE = "Linux"

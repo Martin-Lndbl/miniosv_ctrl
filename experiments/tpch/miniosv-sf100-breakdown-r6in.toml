@@ -1,0 +1,58 @@
+name = "miniosv-sf100-breakdown-r6in"
+title = "DuckDB-on-miniOSv at sf=100 on r6in.8xlarge: the arm that stands beside the Linux breakdown"
+description = """
+The miniOSv half of the overhead breakdown. It is the suite's configuration
+exactly -- `workers=4, conns=128, threads=256` -- and needs no instrumentation
+knob, because the mininet worker already stamps every request's turnaround and
+body. So why a separate experiment at all, when miniosv-sf100-suite-r6in
+already holds two clean reps of the same thing?
+
+**Because the S3 segment is only comparable if the two arms face S3 at the
+same moment.** A request's turnaround belongs to S3, not to the client, and
+the earlier attempt at this figure had the arms 64% apart on it -- with two
+unseparated causes, one of which was simply having run at different times. So
+this exists to be the thing `--concurrent` pairs with linux-sf100-breakdown-r6in:
+each on its own instance, both dialling the same bucket in the same minutes.
+Writing to its own CSV rather than resuming the suite's is what lets both arms
+start from rep 1 together.
+
+The other cause was in-flight depth, and it is not fixed by scheduling: ttfb
+rises with concurrency, so the arm holding more requests open shows a larger
+S3 segment per request for reasons that have nothing to do with its stack.
+**Read the bands as proportions within an arm's own bar**, never one arm's
+segment against the other's.
+
+One rep, since this figure is about proportions rather than bar heights, and
+those proved stable across scale factors in the earlier work.
+
+    scripts/bench/breakdown.py results/tpch/miniosv-sf100-breakdown-r6in.csv \\
+        --linux results/tpch/linux-sf100-breakdown-r6in.csv
+
+S3 cost: ~450k GET requests, about \\$0.18.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 3600
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+bar       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 128
+threads = 256
+
+[env]
+BENCH_NOTE = "miniOSv"

@@ -346,10 +346,22 @@ class DuckdbLinux(Bench):
         heads = list(re.finditer(r"^Q(\d+): ", text, re.M))
         if len(heads) <= 1:
             return finish(parse(text, self.metrics))
+        # The NIC tune prints once, before the first query, so it lands in no
+        # slice: `nic_gro` came back empty and `valid` compared the asked-for
+        # "off" against nothing, discarding **every** row of a multi-query gro
+        # run while the tune had in fact applied. Parse the whole log for the
+        # fields that describe the boot rather than a query, and fill them in
+        # where a slice could not see them.
+        runwide = parse(text, {k: v for k, v in self.metrics.items()
+                               if k in ("nic_gro", "nic_queues", "nic_tune_failed")})
         rows = []
         for i, h in enumerate(heads):
             end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
-            rows.append(finish(parse(text[h.start():end], self.metrics), int(h.group(1)), i + 1))
+            row = finish(parse(text[h.start():end], self.metrics), int(h.group(1)), i + 1)
+            for k, v in runwide.items():
+                if v is not None and row.get(k) in (None, ""):
+                    row[k] = v
+            rows.append(row)
         return rows
 
     def valid(self, row: dict) -> bool:

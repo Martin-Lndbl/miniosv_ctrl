@@ -1,0 +1,66 @@
+name = "linux-sf100-nosub-r6in"
+title = "DuckDB on Linux at sf=100 on r6in.8xlarge: is oversubscription helping, over all 22 queries?"
+description = """
+A correction to how linux-sf100-suite-r6in's `threads=128` was chosen. That
+value won a sweep over **five** queries (1/8/9/13/21), and those five skew
+heavy: the sum they decide is dominated by Q08/Q09/Q21, so 128 won the total
+while being the wrong number for most of its own subset --
+
+| query | its own best | cost at 128 |
+|---|---|---|
+| q01 | 128 | +0.0% |
+| q08 | 256 | +5.3% |
+| q09 | 128 | +0.0% |
+| q13 | **64** | **+37.7%** |
+| q21 | 256 | +14.9% |
+
+-- and the full suite then showed the miniOSv lead splitting the same way:
+geomean 1.82x over the five tuned-on queries against 2.58x over the other 17,
+and 3.21x on the six queries issuing under 10k requests against 2.13x on the
+sixteen above. Light queries are exactly where a thread count fitted to heavy
+ones should hurt, and Q13 -- the lightest of the five -- is the one that
+wanted 64.
+
+So this sweeps **the whole 22-query suite**, not a subset, and reaches below
+the 2x oversubscription that was the sweep's floor: **32 threads is one per
+vCPU, no oversubscription at all**, the point the original sweep never took
+because the rule was to go below 64 only if 64 beat 128, and it did not.
+
+`threads=128` is in the grid as a **same-session control**, not for its own
+sake. The Linux arm's run-to-run spread is 7.7% over a suite and up to 61% on
+one query (see the suite's figure), so comparing today's 32 against
+yesterday's 128 across a boot boundary would not be readable; comparing them
+inside one queue is.
+
+One rep a point. That is deliberately thin -- the question here is whether 32
+or 64 is *dramatically* better on the light queries, which is a 2-3x effect
+if it exists, not a 5% one. If a point wins, it earns a proper paired rerun.
+
+    just plot results/tpch/linux-sf100-nosub-r6in.csv --x query --series threads \\
+        --bar --value-col query_ms --ylabel "Query latency (ms)"
+
+S3 cost: ~450k GET requests a point, ~\\$0.54 for the three.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "threads"
+grid     = { threads = [32, 64, 128] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "threads"
+bar       = true
+
+[fixed]
+sf    = "100"
+gro   = "off"
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[env]
+BENCH_NOTE = "Linux t{threads}"

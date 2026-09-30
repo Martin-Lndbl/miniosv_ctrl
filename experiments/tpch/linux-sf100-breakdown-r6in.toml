@@ -1,0 +1,67 @@
+name = "linux-sf100-breakdown-r6in"
+title = "DuckDB on Linux at sf=100 on r6in.8xlarge: a request's split, measured at the socket"
+description = """
+The Linux half of the overhead breakdown, to stand beside the miniOSv arm in
+`scripts/bench/breakdown.py`. miniOSv times every request itself, so its bars
+come free out of the suite CSV; Linux needs instrumenting, which is what this
+run is for and why it is a separate experiment rather than a knob on the
+suite.
+
+`httplog=1` adds a second pass per query with DuckDB's HTTP request log on,
+giving each request's whole life above the client. `netphase=1` runs that pass
+under `competitors/duckdb-linux/netphase`, an LD_PRELOAD shim that stamps
+every socket send and receive, so the life splits the same three ways the
+miniOSv worker reports: S3's turnaround, the body on the wire, and what the
+client and stack add.
+
+**Runs concurrently with the miniOSv arm, and that is the point.** A
+per-request breakdown's S3 segment belongs to S3, not to the client, so the
+two arms must face the same S3 at the same moment; the previous attempt at
+this figure had them 64% apart on that segment with two unseparated causes,
+one of which was running at different times. `--concurrent` puts each arm on
+its own instance simultaneously, which the quota allows at 8xlarge (it did not
+at 16xlarge, where it silently degraded to interleaving).
+
+The other half of that gap was in-flight depth: ttfb rises with concurrency,
+so the arm holding more requests open shows a *larger* S3 segment per request
+for reasons that are nothing to do with its stack. Read the bands as
+proportions of an arm's own bar, never as one arm's segment against the
+other's.
+
+Two defects fixed in `breakdown.py` before this runs, both Linux-side:
+the bar is now the **clean** pass's `query_ms` with the logged pass supplying
+only proportions (instrumenting cost +3.0/+12.2/+46.1% on three earlier
+sf=100 reps, so the old bar was up to half again too tall); and the
+`np_hs_ms_avg` handshake -- 348-411 ms, which no intra-region TLS handshake
+takes -- is no longer folded into the turnaround.
+
+One rep: this figure is about proportions, which the earlier work showed are
+stable across scale factors (stack 0.8% miniOSv / 29.8% Linux at sf=100
+against 0.7% / 26.5% at sf=10) even where bar heights are not.
+
+    scripts/bench/breakdown.py results/tpch/miniosv-sf100-suite-r6in.csv \\
+        --linux results/tpch/linux-sf100-breakdown-r6in.csv
+
+S3 cost: two passes a query, so ~900k GET requests, about \\$0.36.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 3600
+keep_going = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf       = "100"
+gro      = "off"
+threads  = 128
+httplog  = "1"
+netphase = "1"
+
+[env]
+BENCH_NOTE = "Linux"
