@@ -1,0 +1,42 @@
+name = "linux-http-200g-pool"
+title = "HTTP (no TLS): Linux at the same dynamic shape as miniOSv, 8 workers first"
+description = """
+The Linux arm reshaped to match the unikernel now that both benches draw
+ranges from a shared pool. `BENCH_BLOCKS_PER_WORKER` did not exist on this side
+until 2026-09-30; a connection fetched one block and the thread exited, so
+"blocks > conns" was unreachable and the two arms could not be configured
+alike once miniOSv started refilling.
+
+conns=64, blocks=256, block=32M: four refill rounds a slot, 8 GiB a worker,
+identical to miniosv-http-200g-jumbo-pool. That identity is the whole point --
+the 200G sweep's premise is that the arms differ in the stack and nothing else.
+
+mode=capped: the unikernel's core budget, every Linux feature kept. Start at 8
+workers, one run, where the frame-size gap was widest and where the partitioned
+sweep read 136.9 Gbps against miniOSv's 63.6.
+
+Drain is why the shape changed. Against a static nginx -- a symmetric server
+with no front-end lottery -- two partitioned miniOSv workers still finished
+1.10 s and 1.60 s apart, 31.4% of the run, so the drain is not only S3's doing
+and the pool is worth having on both sides.
+"""
+
+bench    = "competitors/linux-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [8] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+
+[fixed]
+conns  = 64
+blocks = 256
+block  = "32M"
+mode   = "capped"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "Linux"

@@ -46,13 +46,18 @@ class LinuxS3(Bench):
         "workers": ("BENCH_WORKERS", size),
         "conns": ("BENCH_CONNS_PER_WORKER", size),
         "block": ("BENCH_BLOCK_SIZE", size),
+        # Same meaning as the unikernel's: 0 is one block per connection, so a
+        # slot dials once. Above `conns` the slots refill from a shared pool,
+        # which is the only shape where handing ranges out dynamically can act.
+        "blocks": ("BENCH_BLOCKS_PER_WORKER", size),
         # stock  = as-shipped AL2023, all 32 cores
         # capped = the unikernel's 8-core budget, every Linux feature kept
         # parity = capped, plus jumbo/GRO/delayed-ACK/autotuning removed
         "mode": ("MODE", str),
     }
     # The point the existing smoltcp rows sit at.
-    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "mode": "stock"}
+    defaults = {"workers": 8, "conns": 24, "block": 128 << 20, "blocks": 0,
+                "mode": "stock"}
     instance_tag = "linux-s3-bench"
     default_instance = "c6in.8xlarge"
     max_vm_seconds = 900  # mostly waiting for EC2 to expose the console
@@ -111,6 +116,7 @@ class LinuxS3(Bench):
             "BENCH_WORKERS": str(cfg["workers"]),
             "BENCH_CONNS_PER_WORKER": str(cfg["conns"]),
             "BENCH_BLOCK_SIZE": str(cfg["block"]),
+            "BENCH_BLOCKS_PER_WORKER": str(cfg["blocks"]),
             "BENCH_TLS_STUB": os.environ.get("BENCH_TLS_STUB", "0"),
             # "http" drops TLS and dials 80.
             "BENCH_SCHEME": os.environ.get("BENCH_SCHEME", "https"),

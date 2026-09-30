@@ -27,7 +27,7 @@ ranges up can close it.
 bench    = "apps/bench/smoltcp-s3"
 instance = "r6in.32xlarge"
 axis     = "workers"
-grid     = { workers = [16, 24, 32] }
+grid     = { workers = [8, 16, 24, 32] }
 reps     = 1
 cooldown = 0
 max_vm_seconds = 900
@@ -41,4 +41,4 @@ blocks = 256
 BENCH_SCHEME    = "http"
 BENCH_TLS_STUB  = "0"
 AWS_BUCKET_SIZE = "50G"
-BENCH_NOTE      = "miniOSv jumbo + pool, 32w"
+BENCH_NOTE      = "miniOSv (shared pool)"

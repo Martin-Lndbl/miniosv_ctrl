@@ -77,11 +77,11 @@ ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "results" / "s3"
 
 ARMS = [
-    ("miniosv-http-200g-jumbo", "miniOSv (jumbo, MTU 9001)", "#15aabf", "D", "-"),
-    ("miniosv-http-200g-jumbo-pool", "miniOSv (jumbo + pool, reshaped)", "#9c36b5", "v", ":"),
+    ("miniosv-http-200g-jumbo", "miniOSv", "#15aabf", "D", "-"),
+    ("miniosv-http-200g-jumbo-pool", "miniOSv (shared pool)", "#9c36b5", "v", ":"),
     ("miniosv-http-200g", "miniOSv (MTU 1500)", "#0b7285", "o", "--"),
     ("linux-http-200g-capped", "Linux", "#c92a2a", "s", "-"),
-    ("linux-http-200g-nogro1500", "Linux (MTU 1500, no GRO)", "#e8590c", "^", "--"),
+    ("linux-http-200g-nogro1500", "Linux (MTU 1500)", "#e8590c", "^", "--"),
 ]
 
 

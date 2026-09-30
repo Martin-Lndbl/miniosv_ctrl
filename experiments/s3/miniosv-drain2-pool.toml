@@ -33,7 +33,7 @@ bench    = "apps/bench/smoltcp-s3"
 instance = "c6in.large"
 axis     = "conns"
 grid     = { conns = [16] }
-reps     = 4
+reps     = 2
 cooldown = 0
 max_vm_seconds = 600
 
