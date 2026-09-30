@@ -29,16 +29,16 @@ import pandas as pd  # noqa: E402
 INK = {
     "light": dict(surface="#fcfcfb", text="#0b0b0b", muted="#898781",
                   grid="#e1e0d9", axis="#c3c2b7", bad="#d03b3b",
-                  series=["#2a78d6", "#eb6834", "#1baf7a"]),
+                  series=["#2a78d6", "#eb6834", "#1baf7a", "#cc79a7", "#8f6ad4"]),
     "dark": dict(surface="#1a1a19", text="#ffffff", muted="#898781",
                  grid="#2c2c2a", axis="#383835", bad="#d03b3b",
-                 series=["#3987e5", "#d95926", "#199e70"]),
+                 series=["#3987e5", "#d95926", "#199e70", "#d98cb8", "#a98ae0"]),
 }
 
 # Shape, not just hue, so a series still reads in greyscale.
-MARKERS = ["o", "s", "^"]
-DASHES = ["-", "--", ":"]
-HATCH = ["", "//", "xx"]
+MARKERS = ["o", "s", "^", "D", "v"]
+DASHES = ["-", "--", ":", "-.", (0, (3, 1, 1, 1))]
+HATCH = ["", "//", "xx", "..", "\\\\"]
 
 
 def rc(c: dict) -> dict:
@@ -141,6 +141,8 @@ def plot(
     box: bool = False,
     x_col: str | None = None,
     facet_col: str | None = None,
+    hline: float | None = None,
+    hline_label: str | None = None,
 ) -> None:
     c = INK[mode]
     if x_col:
@@ -154,7 +156,8 @@ def plot(
 
     for i, (ax, (facet, fdf)) in enumerate(zip(axes[0], facets)):
         draw(ax, fdf, c, i == 0, facet, facet_col, series_col, title, value_col, ylabel,
-             unit, bar, log_scale, box, top, named=bool(x_col))
+             unit, bar, log_scale, box, top, named=bool(x_col),
+             hline=hline, hline_label=hline_label)
     if facet_col:
         handles, labels = axes[0][0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", ncol=len(labels), bbox_to_anchor=(0.5, -0.12),
@@ -166,7 +169,7 @@ def plot(
 
 
 def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabel, unit,
-         bar, log_scale, box, top, named=False):
+         bar, log_scale, box, top, named=False, hline=None, hline_label=None):
     axis = str(df["axis"].iloc[0])
     instance = str(df["instance"].iloc[0])
     stats = summarise(df, series_col, value_col)
@@ -354,7 +357,24 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
         ax.set_yscale("log")
     else:
         # Anchored at zero: cropping a magnitude's baseline exaggerates slope.
-        ax.set_ylim(0, max(ceiling or 0, top) * 1.12)
+        ax.set_ylim(0, max(ceiling or 0, hline or 0, top) * 1.12)
+
+    # An explicit reference line, for a limit the CEILING table cannot express:
+    # a wire rate is not an "instance sustained" figure, and labelling it as one
+    # would claim a throughput that was never reached.
+    if hline:
+        ax.axhline(hline, color=c["muted"], lw=1, ls=(0, (5, 4)), zorder=1)
+        if hline_label:
+            ax.annotate(
+                hline_label,
+                (0.995, hline),
+                xycoords=ax.get_yaxis_transform(),
+                textcoords="offset points",
+                xytext=(0, 5),
+                ha="right",
+                fontsize=8,
+                color=c["muted"],
+            )
 
     ax.set_xlabel(LABELS.get(axis, axis))
     if first:
@@ -369,7 +389,7 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
     )
     fixed = ", ".join(
         f"{k}={tick(k, df[k].iloc[0], axis_of_plot=False)}"
-        for k in LABELS if k in df and k != axis
+        for k in LABELS if k in df and k != axis and df[k].nunique(dropna=False) == 1
     )
     spread = spread.format(fixed)
     if facet is not None:
@@ -420,6 +440,12 @@ def main() -> int:
         "--log-scale", action="store_true", help="log y-axis"
     )
     ap.add_argument(
+        "--hline", type=float, default=None,
+        help="draw a reference line at this y value, e.g. a wire rate the "
+             "CEILING table cannot express as an instance's sustained figure",
+    )
+    ap.add_argument("--hline-label", default=None, help="text for --hline")
+    ap.add_argument(
         "--box", action="store_true",
         help="a box per rep-set instead of a mean with a range; use when the "
              "spread across reps is itself the result",
@@ -440,7 +466,7 @@ def main() -> int:
     mode = "dark" if a.dark else "light"
     out = a.out or a.csv.with_name(f"{a.csv.stem}{'-dark' if a.dark else ''}.png")
     plot(df, out, mode, a.series, a.title, a.value_col, a.ylabel, a.unit,
-         a.bar, a.log_scale, a.box, a.x, a.facet)
+         a.bar, a.log_scale, a.box, a.x, a.facet, a.hline, a.hline_label)
     valid = int(df["valid"].sum())
     print(f"wrote {out} ({valid}/{len(df)} runs valid)")
     return 0

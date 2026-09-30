@@ -72,6 +72,9 @@ fn env(k: &str) -> Option<String> {
 struct Config {
     workers: usize,
     conns_per_worker: usize,
+    /// Blocks a worker's share of the pool contributes; 0 means one per
+    /// connection, which is what every run before the pool did.
+    blocks_per_worker: usize,
     object_size: u64,
     block_size: u64,
     stub: bool,
@@ -87,6 +90,12 @@ struct Config {
 fn load_config() -> Result<Config, String> {
     let workers = parse_size(env("BENCH_WORKERS"), 8) as usize;
     let conns_per_worker = parse_size(env("BENCH_CONNS_PER_WORKER"), 24) as usize;
+    // Matches the unikernel's `blocks_per_worker()`: 0 means one block per
+    // connection, so a slot dials once and the pool never refills.
+    let blocks_per_worker = match parse_size(env("BENCH_BLOCKS_PER_WORKER"), 0) as usize {
+        0 => conns_per_worker,
+        n => n,
+    };
     let object_size = parse_size(env("AWS_BUCKET_SIZE"), 10 * 1024 * 1024 * 1024);
     let block_size = parse_size(env("BENCH_BLOCK_SIZE"), 64 * 1024 * 1024);
     let mut stub = parse_bool(env("BENCH_TLS_STUB"), false);
@@ -145,7 +154,7 @@ fn load_config() -> Result<Config, String> {
         _ => Tuning::none(),
     };
 
-    Ok(Config { workers, conns_per_worker, object_size, block_size, stub, plain,
+    Ok(Config { workers, conns_per_worker, blocks_per_worker, object_size, block_size, stub, plain,
                 target_ip, host, path, tuning, mode })
 }
 
@@ -288,7 +297,7 @@ struct Job {
     epoch: Instant,
 }
 
-fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
+fn run_conn(job: &Job, worker: usize, block: u64, barrier: Option<&Barrier>,
             worker_start_ns: &AtomicU64) -> Outcome {
     let Job { object_size, block_size, stub, tuning, epoch, target, .. } = *job;
     // Blocks wrap within the object, so distinct connections read distinct
@@ -321,7 +330,10 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: &Barrier,
     // Reached on every path, including the failure above: this barrier expects
     // all C of the worker's threads, so one of them returning early would hang
     // the other C-1 for the lifetime of the process.
-    if barrier.wait().is_leader() {
+    // `None` on a slot's second and later blocks: the barrier counts the
+    // worker's C slots exactly once each, so waiting per block would expect
+    // more arrivals than there are threads and hang the run.
+    if barrier.is_some_and(|b| b.wait().is_leader()) {
         worker_start_ns.store(epoch.elapsed().as_nanos() as u64, Ordering::Relaxed);
     }
 
@@ -654,18 +666,39 @@ fn main() {
     // Scoped threads so they can borrow `job` and the barriers rather than each
     // taking its own Arc of everything. No join-error arm: the release profile
     // aborts on panic, so a panicking connection takes the process with it.
+    // One pool for the whole run, drained a block at a time, mirroring the
+    // unikernel's `claim_block`. A slot that finishes early takes more work
+    // instead of idling while a slow one holds the run open, which is what
+    // made the partitioned version drain for most of its wall clock.
+    let next_block = AtomicU64::new(0);
+    let total_blocks = (cfg.workers * cfg.blocks_per_worker) as u64;
     let overall = Instant::now();
     let outcomes: Vec<Outcome> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..cfg.workers)
             .flat_map(|w| (0..cfg.conns_per_worker).map(move |i| (w, i)))
-            .map(|(w, i)| {
-                // `first_block = worker * CONNS_PER_WORKER` (`lib.rs:1437`).
-                let block = (w * cfg.conns_per_worker + i) as u64;
+            .map(|(w, _i)| {
                 let (job, barrier, ws) = (&job, &barriers[w], &worker_start[w]);
-                s.spawn(move || run_conn(job, w, block, barrier, ws))
+                let pool = &next_block;
+                s.spawn(move || {
+                    let mut outs: Vec<Outcome> = Vec::new();
+                    loop {
+                        let block = pool.fetch_add(1, Ordering::Relaxed);
+                        if block >= total_blocks {
+                            break;
+                        }
+                        let first = outs.is_empty();
+                        outs.push(run_conn(job, w, block, first.then_some(barrier), ws));
+                    }
+                    // A slot that never drew a block still owes the barrier its
+                    // arrival, or the rest of the worker waits for it forever.
+                    if outs.is_empty() {
+                        barrier.wait();
+                    }
+                    outs
+                })
             })
             .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
     });
     let overall_s = overall.elapsed().as_secs_f64();
 
@@ -737,7 +770,7 @@ fn main() {
     );
 
     let ranges_ok = conns_clean == conns_total && conns_total > 0;
-    let planned_conns = (cfg.workers * cfg.conns_per_worker) as u64;
+    let planned_conns = (cfg.workers * cfg.blocks_per_worker) as u64;
     let covered = conns_total == planned_conns;
 
     println!();
