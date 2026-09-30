@@ -22,7 +22,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import httpserver  # noqa: E402
 import runner  # noqa: E402
+from httpserver import HttpServer  # noqa: E402
 from runner import COMMON_METRICS, ROOT, size  # noqa: E402
 
 # scripts/bench/linux-s3 is not an importable name; load it by path.
@@ -54,9 +56,24 @@ class AnyBlob(LinuxS3):
         "chunk": ("BENCH_CHUNK", size),               # recv size per io_uring op
         # 1 = /etc/hosts pins the bucket to the target IP; 0 = resolve normally.
         "pin": ("BENCH_PIN", flag),
+        # The nginx arm. `url` points the library at any http(s)://host/key
+        # instead of the bucket -- main.cpp already takes it, through
+        # Provider::makeAnonymousProvider, and it is how AnyBlob joins the
+        # bandwidth figure. Left empty the sweep is the S3 one it always was.
+        "scheme": ("BENCH_SCHEME", str),
+        "url": ("BENCH_URL", str),
+        # 0 = the machine as shipped; N confines the daemons and the NIC to N
+        # cores, by the same code competitors/wrk-http uses.
+        "cpus": ("BENCH_CPUS", int),
+        # stock = AL2023 as shipped; nogro = mininet's wire (GRO off, mtu 9001)
+        "mode": ("MODE", str),
+        # The nginx instance type; launched once per point. "" dials a
+        # long-living one through --target-ip.
+        "server": ("BENCH_SERVER", str),
     }
-    defaults = {"workers": 16, "conns": 24, "block": 128 << 20, "blocks": 0,
-                "chunk": 64 << 10, "pin": 0}
+    defaults = {"workers": 0, "conns": 24, "block": 128 << 20, "blocks": 0,
+                "chunk": 64 << 10, "pin": 0, "scheme": "https", "url": "",
+                "cpus": 0, "mode": "stock", "server": ""}
     instance_tag = "anyblob-bench"
     default_instance = "c6in.16xlarge"
     max_vm_seconds = 900
@@ -85,20 +102,61 @@ class AnyBlob(LinuxS3):
         "pinned": (r"^pinned\s+: (\S+)", str),
     }
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.server: HttpServer | None = None
+
+    def build(self, cfg: dict, ip: str) -> None:
+        super().build(cfg, ip)
+        if not cfg.get("url"):
+            return  # the S3 sweep: no server of ours to stand up
+        if not cfg.get("server"):
+            httpserver.verify_external(ip, os.environ.get("BENCH_ZONE"))
+            self.zone = os.environ.get("BENCH_ZONE") or None
+            return
+        if self.server:
+            self.server.stop()
+        self.server = HttpServer(str(cfg["server"]), os.environ.get("BENCH_SERVER_MARKET", "spot"),
+                                 ROOT / "results/http/logs", client=self.instance,
+                                 size=os.environ.get("AWS_BUCKET_SIZE", "10G"))
+        self.server.start()
+        self.zone = self.server.zone  # same zone: no cross-AZ hop, no cross-AZ bill
+
+    def target_ip(self, cfg: dict, ip: str) -> str:
+        return self.server.ip if self.server else ip
+
+    def run_once(self, instance: str, logdir, cfg: dict, ip: str) -> dict:
+        target = self.target_ip(cfg, ip)
+        row = super().run_once(instance, logdir, cfg, target)
+        if self.server:
+            row["server_id"], row["server_zone"], row["target_ip"] = self.server.iid, self.server.zone, self.server.ip
+        elif cfg.get("url"):
+            row["server_zone"], row["target_ip"] = os.environ.get("BENCH_ZONE", ""), target
+        return row
+
     def user_data(self, cfg: dict, ip: str, run_id: str) -> str:
         import json
+        target = self.target_ip(cfg, ip)
+        # `url` is a template: the address is only known once the server is up,
+        # so "http://HOST/blob.bin" in the TOML becomes the private IP here.
+        url = str(cfg.get("url") or "").replace("HOST", target)
         conf = {
             "AWS_BUCKET": os.environ["AWS_BUCKET"],
             "AWS_REGION": os.environ["AWS_REGION"],
             "AWS_BUCKET_SIZE": os.environ.get("AWS_BUCKET_SIZE", "10G"),
-            "AWS_TARGET_IP": ip,
-            "BENCH_WORKERS": str(cfg["workers"]),
+            "AWS_TARGET_IP": target,
+            # One daemon per core of the budget, so the axis moves the same
+            # thing it moves on the unikernel arm, where a worker owns a core.
+            "BENCH_WORKERS": str(cfg["workers"] or cfg["cpus"] or 16),
             "BENCH_CONNS_PER_WORKER": str(cfg["conns"]),
             "BENCH_BLOCK_SIZE": str(cfg["block"]),
             "BENCH_BLOCKS": str(cfg["blocks"]),
             "BENCH_CHUNK": str(cfg["chunk"]),
             "BENCH_PIN": str(cfg["pin"]),
-            "BENCH_SCHEME": os.environ.get("BENCH_SCHEME", "https"),
+            "BENCH_SCHEME": str(cfg["scheme"]),
+            "BENCH_URL": url,
+            "BENCH_CPUS": str(cfg["cpus"]),
+            "MODE": str(cfg["mode"]),
             "RUN_ID": run_id,
         }
         body = (self.scripts_dir / "instance.py").read_text()

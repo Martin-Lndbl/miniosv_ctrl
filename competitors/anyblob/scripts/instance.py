@@ -136,7 +136,10 @@ def fingerprint(iface, gw):
     say("shape        : {} workers x {} conns x {} block, {} blocks/worker, chunk {}".format(
         cfg("BENCH_WORKERS"), cfg("BENCH_CONNS_PER_WORKER"), cfg("BENCH_BLOCK_SIZE"),
         cfg("BENCH_BLOCKS", "0"), cfg("BENCH_CHUNK", "65536")))
-    say("object       : {}://{}/blob.bin ({})".format(cfg("BENCH_SCHEME", "https"), HOST, cfg("AWS_BUCKET_SIZE")))
+    say("object       : {} ({})".format(
+        cfg("BENCH_URL") or "{}://{}/blob.bin".format(cfg("BENCH_SCHEME", "https"), HOST),
+        cfg("AWS_BUCKET_SIZE")))
+    say("cpus         : {}".format(cfg("BENCH_CPUS", "0") or "all"))
     say("target ip    : " + cfg("AWS_TARGET_IP"))
     say("scheme       : " + cfg("BENCH_SCHEME", "https"))
 
@@ -177,6 +180,11 @@ def pin():
     and SNI stay the bucket's name and the certificate still verifies."""
     rule("resolver")
     ip = cfg("AWS_TARGET_IP")
+    if cfg("BENCH_URL"):
+        # An explicit URL already carries the address (the nginx arm dials a
+        # private IP), so there is no name for /etc/hosts to intercept.
+        say("pinned       : n/a, BENCH_URL is {}".format(cfg("BENCH_URL")))
+        return
     if cfg("BENCH_PIN", "0") == "1" and ip:
         with open("/etc/hosts", "a") as fh:
             fh.write("\n{} {}\n".format(ip, HOST))
@@ -185,6 +193,51 @@ def pin():
     else:
         say("pinned       : no (AnyBlob resolves {} itself)".format(HOST))
         say("resolves to  : " + ", ".join(sorted({l.split()[0] for l in run("getent", "ahostsv4", HOST).splitlines() if l.strip()})))
+
+
+def gro_off(iface):
+    """Receive aggregation removed and nothing else -- the MTU stays at 9001.
+    Verbatim from competitors/wrk-http: the two Linux arms of the nginx figure
+    have to be shaped by the same code or the axis means different things."""
+    mtu = read("/sys/class/net/{}/mtu".format(iface))
+    say("nogro        : GRO off, mtu {} left alone".format(mtu))
+    run("ethtool", "-K", iface, "gro", "off")
+    run("ethtool", "-K", iface, "lro", "off")
+    gro = [l for l in run("ethtool", "-k", iface).splitlines()
+           if l.startswith("generic-receive-offload")]
+    say("             : {}, mtu {}".format(gro[0] if gro else "gro unknown", mtu))
+
+
+def cap_cores(iface, n):
+    """irqbalance off, one channel per core of the budget, IRQs and XPS on
+    those cores. The binary itself is confined by taskset in run_bench, so no
+    softirq or daemon lands outside them."""
+    say("cap          : {} cores, {} channels, IRQs and XPS on 0-{}".format(n, n, n - 1))
+    run("systemctl", "stop", "irqbalance")
+    run("ethtool", "-L", iface, "combined", str(n))
+    pinned = 0
+    for line in read("/proc/interrupts").splitlines():
+        if iface in line and ":" in line:
+            irq = line.split(":", 1)[0].strip()
+            if irq.isdigit():
+                try:
+                    with open("/proc/irq/{}/smp_affinity_list".format(irq), "w") as fh:
+                        fh.write(str(pinned % n))
+                    pinned += 1
+                except OSError:
+                    pass
+    xps, qdir = 0, "/sys/class/net/{}/queues".format(iface)
+    for q in sorted(os.listdir(qdir) if os.path.isdir(qdir) else []):
+        if q.startswith("tx-"):
+            try:
+                with open("{}/{}/xps_cpus".format(qdir, q), "w") as fh:
+                    fh.write(format(1 << (xps % n), "x"))
+                xps += 1
+            except OSError:
+                pass
+    say("             : {} IRQs pinned, XPS on {} tx queues, channels now {}".format(
+        pinned, xps, run("ethtool", "-l", iface).count("Combined") and
+        [ln.split()[-1] for ln in run("ethtool", "-l", iface).splitlines() if "Combined" in ln][-1]))
 
 
 def counters(iface):
@@ -253,7 +306,11 @@ def run_bench(iface):
             env.setdefault("SSL_CERT_FILE", ca)
             say("ca bundle    : " + ca)
             break
-    p = subprocess.Popen([BIN], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    cpus = int(cfg("BENCH_CPUS", "0") or 0)
+    argv = ["taskset", "-c", "0-{}".format(cpus - 1), BIN] if cpus > 0 else [BIN]
+    if cpus > 0:
+        say("taskset      : 0-{}".format(cpus - 1))
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     assert p.stdout is not None
     for line in p.stdout:
         say(line.rstrip("\n"))
@@ -271,6 +328,11 @@ def main():
         fingerprint(iface, gw)
         if not fetch_binary():
             return 1
+        cpus = int(cfg("BENCH_CPUS", "0") or 0)
+        if cfg("MODE") == "nogro":
+            gro_off(iface)
+        if cpus > 0:
+            cap_cores(iface, cpus)
         pin()
         before = counters(iface)
         rc = run_bench(iface)

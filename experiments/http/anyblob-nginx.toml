@@ -1,0 +1,70 @@
+name = "anyblob-nginx"
+title = "AnyBlob's download manager against the same static nginx: throughput per core"
+description = """
+The third arm of the bandwidth figure, beside miniosv-nginx and wrk-nginx. It
+exists to answer the obvious objection to a two-arm comparison: that the
+unikernel beats `wrk` because `wrk` is an ordinary HTTP load generator, not
+because the stack is faster. AnyBlob (Durner, Leis, Neumann, VLDB 2023) is a
+purpose-built cloud object-store download manager -- io_uring, a shared
+submission queue, one daemon per core -- and on raw S3 GETs it has already
+beaten us: 94.9 Gbps against 83.5, at 8.4 busy cores against our 16 polling
+(see the anyblob-sf100 work). If the per-core claim survives AnyBlob on the
+same wire, it is a claim about the stack.
+
+No new client code: `competitors/anyblob/src/main.cpp` already took
+`BENCH_URL` (any http(s)://host/key, through
+`Provider::makeAnonymousProvider`) and `BENCH_SCHEME=http`. What was missing
+was the core budget, which is this figure's whole axis -- so `gro_off` and
+`cap_cores` are lifted **verbatim** from `competitors/wrk-http/scripts/
+instance.py` and the binary is confined by `taskset`. Two Linux arms shaped by
+one piece of code, or the x-axis means different things on each.
+
+**Matching the shape.** Depth is `workers x conns` = 64 per core, the same
+count the unikernel carries (64 a worker) and the same `wrk` is scaled to
+(`conns_per_cpu = 64`). `blocks = 256` a worker and `block = 32M` are
+miniosv-nginx's. `workers` is left at 0, which the driver reads as "one daemon
+per core of the budget", so the single axis moves cores, daemons and depth
+together exactly as it does on the unikernel.
+
+**The one asymmetry, and why it stands.** mininet and `wrk` both send
+`Connection: close`, so a connection carries one block and a slot redials four
+times over the run. AnyBlob builds its headers inside the library and reuses
+connections through its `ConnectionManager`; there is no knob for it, and
+`competitors/anyblob/AnyBlob` is a git submodule, so forcing it means carrying
+a patch there. At 32\\,MiB a block the dial is well under a percent of the
+transfer, and it favours AnyBlob -- it cannot manufacture a win for us --- so
+it is documented rather than removed.
+
+    scripts/bench/nginx-server.py start --client r6in.32xlarge
+    BENCH_ZONE=<its zone> just reproduce anyblob-nginx --target-ip <its ip>
+
+    just plot results/http/miniosv-nginx.csv results/http/wrk-nginx.csv \\
+        results/http/anyblob-nginx.csv --series note --x cpus \\
+        --value-col gbps --ylabel "Gbps (payload)"
+"""
+
+bench    = "competitors/anyblob"
+instance = "r6in.32xlarge"
+axis     = "cpus"
+grid     = { cpus = [2, 4, 8, 16, 32] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+
+value_col = "gbps"
+ylabel    = "Gbps (payload, whole run)"
+unit      = "Gbps"
+series    = "note"
+
+[fixed]
+conns  = 64
+blocks = 256
+block  = "32M"
+scheme = "http"
+mode   = "nogro"
+url    = "http://HOST/blob.bin"
+server = "r6in.32xlarge"
+
+[env]
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "Linux + AnyBlob"
