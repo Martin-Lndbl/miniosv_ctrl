@@ -41,6 +41,17 @@ kept for the delta. At 8 cores that is 63.6 -> 108.4 Gbps aggregate (+70%),
 115.9 aggregate, 153.9 -> 173.0 of frames) -- which also says the 153.9 once
 read as a single-ENI ceiling was partly a packet-rate limit, not bandwidth.
 
+The pooled arm is **a different shape and does not belong on this axis as a
+peer**: blocks=256 at 32 MiB against the sweep's blocks=0 at 128 MiB, because
+with one block per connection the pool has nothing to redistribute. Same 256
+GiB, but four times the connections, so its aggregate carries four times the
+handshake cost. It is drawn to show where the sweep would sit if ranges were
+claimed rather than owned, and it should be read on drain, not on this y axis:
+at 32 workers the spread between first and last worker went 56.5% -> 32.5% of
+the run and the every-slot-busy window went 2.14 s -> 11.30 s, while WIRE
+STEADY barely moved (173.7 -> 174.6). The pool converts drain into steady
+state; it does not make the wire faster.
+
 Two caveats on that line. S3 caps its own segments at 8228 bytes of payload
 -- Linux advertises 8949 on a 9001 path MTU and receives no more -- so 8294
 bytes a frame is the ceiling for both stacks, not a miniOSv shortfall. And the
@@ -67,6 +78,7 @@ RESULTS = ROOT / "results" / "s3"
 
 ARMS = [
     ("miniosv-http-200g-jumbo", "miniOSv (jumbo, MTU 9001)", "#15aabf", "D", "-"),
+    ("miniosv-http-200g-jumbo-pool", "miniOSv (jumbo + pool, reshaped)", "#9c36b5", "v", ":"),
     ("miniosv-http-200g", "miniOSv (MTU 1500)", "#0b7285", "o", "--"),
     ("linux-http-200g-capped", "Linux", "#c92a2a", "s", "-"),
     ("linux-http-200g-nogro1500", "Linux (MTU 1500, no GRO)", "#e8590c", "^", "--"),

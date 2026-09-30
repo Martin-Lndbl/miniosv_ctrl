@@ -1,0 +1,44 @@
+name = "miniosv-http-200g-jumbo-pool"
+title = "Does the shared block pool kill the drain at 16, 24 and 32 workers? (jumbo, reshaped)"
+description = """
+Three points: 16, 24 and 32 workers on r6in.32xlarge, one rep each. 32 is where
+the drain was worst and 16 is where the partitioned sweep still looked healthy.
+
+The 32-worker jumbo run spread 56.5% of its wall clock between the first and
+last worker to finish -- 16 done between 7.4 and 10.1 s, 16 between 16.8 and
+17.2 -- because each worker owned a fixed slice of the object and half of them
+had drawn an S3 front-end that will not serve jumbo.
+
+**Reshaped, deliberately.** conns=64 with blocks=256 at 32 MiB, against the
+sweep's conns=64 with blocks=0 at 128 MiB. Same 256 GiB, but four refill rounds
+a slot instead of one block per connection, because with blocks=0 the pool is
+empty after the initial dial and the fix cannot act at all. **So this is not a
+replacement for the w=32 point on the 200G figure** -- it does not share a
+shape with the other points or with the Linux arm. It answers one question:
+does pooling hold at 32 workers the way it did on c6in.large, where mean spread
+over 4 reps a side went 43.2% -> 4.5%.
+
+Smaller blocks alone would not explain a win: under the static partition a
+worker still owns its whole 256-block share and a front-end that is half as
+fast still takes twice as long, so the spread would stand. Only giving the
+ranges up can close it.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [16, 24, 32] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+
+[fixed]
+conns  = 64
+block  = "32M"
+blocks = 256
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "miniOSv jumbo + pool, 32w"
