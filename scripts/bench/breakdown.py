@@ -48,7 +48,8 @@ PARTS = [("S3 turnaround (request out to response headers in; dial + TLS handsha
          ("network stack + HTTP client", "#2e7d32"),
          ("Linux: whole request life (DuckDB HTTP log), split not measured", "stripes"),
          ("DuckDB, no request outstanding", "#4472c4")]
-METHOD = ("Bars: the median run's wall time; the number on top is an average request's life. Coloured bands: "
+METHOD = ("Bars: the median run's clean (uninstrumented) wall time; the number on top is an average request's life. "
+          "Linux's split comes from a second, logged pass and is rescaled onto the clean bar. Coloured bands: "
           "the span with at least one request outstanding, split by how an average request's life divides. "
           "miniOSv: each request timed by the worker. Linux: each request's send, first and last byte stamped at "
           "the socket by an LD_PRELOAD shim in the same pass as DuckDB's HTTP log, which gives the whole life. "
@@ -74,20 +75,31 @@ def miniosv(g: pd.DataFrame) -> tuple[list[float], float, float, float]:
 
 def linux(g: pd.DataFrame) -> tuple[list[float], float, float | None, float | None]:
     """Wall-time parts, the request's average life, and its turnaround and
-    body when the run had the netphase shim (else None, None: one striped band)."""
-    m = median_run(g, "http_profile_ms")
+    body when the run had the netphase shim (else None, None: one striped band).
+
+    The bar is the **clean** pass's wall time, and the logged pass supplies
+    only proportions. Instrumenting costs the Linux arm real time -- +3.0%,
+    +12.2% and +46.1% over its own clean pass on three sf=100 reps -- so a bar
+    drawn at `http_profile_ms` is up to half again too tall, and that is the
+    arm the figure is trying to be fair to.
+    """
+    m = median_run(g, "query_ms")
     per_req = m["http_ms_sum"] / m["http_n"]
     # The union of the requests' intervals, like miniOSv's net_active_ms; the
-    # first-to-last span for runs that predate it.
+    # first-to-last span for runs that predate it. Both come out of the logged
+    # pass, so rescale them onto the clean pass's clock before splitting.
     active = m["http_active_ms"] if pd.notna(m.get("http_active_ms")) else m["http_window_ms"]
-    rest = max(0.0, m["http_profile_ms"] - active)
+    scale = m["query_ms"] / m["http_profile_ms"] if m.get("http_profile_ms") else 1.0
+    active = min(active * scale, m["query_ms"])
+    rest = max(0.0, m["query_ms"] - active)
     if pd.notna(m.get("np_ttfb_ms_avg")):
-        # miniOSv's turnaround includes the dial and TLS handshake of a fresh
-        # socket; the shim reports that exchange apart, so fold it back in per
-        # request. The TCP handshake's own round trip is not stamped and stays
-        # in the rest: a millisecond or so on the few fresh connections.
-        hs = (m["np_hs_n"] * m["np_hs_ms_avg"]) / m["np_n"] if m["np_n"] else 0.0
-        s3, wire = m["np_ttfb_ms_avg"] + hs, m["np_body_ms_avg"]
+        # np_hs_ms_avg is not believable -- 348-411 ms for an intra-region TLS
+        # handshake that is 1-2 RTT -- so it is not folded into the turnaround
+        # the way it once was. The handshake therefore falls into the residual
+        # (the stack band) rather than inflating S3's by a quarter. miniOSv's
+        # turnaround does include its handshakes, so the two arms differ here;
+        # at 98%+ connection reuse it is a small asymmetry, but it is one.
+        s3, wire = m["np_ttfb_ms_avg"], m["np_body_ms_avg"]
         stack = max(0.0, per_req - s3 - wire)
         return [active * s3 / per_req, active * wire / per_req, active * stack / per_req, 0.0, rest], per_req, s3, wire
     return [0.0, 0.0, 0.0, active, rest], per_req, None, None

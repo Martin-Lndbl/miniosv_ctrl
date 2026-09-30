@@ -153,6 +153,8 @@ def plot(
     subtitle: bool = True,
     legend_loc: str = "best",
     legend_anchor: tuple[float, float] | None = None,
+    figsize: tuple[float, float] | None = None,
+    peak_label: bool = True,
 ) -> None:
     c = INK[mode]
     if x_col:
@@ -160,7 +162,8 @@ def plot(
     plt.rcParams.update(rc(c))
     facets = ([(None, df)] if not facet_col else
               [(v, df[df[facet_col] == v]) for v in sorted(df[facet_col].unique())])
-    fig, axes = plt.subplots(1, len(facets), figsize=(8 if len(facets) == 1 else 2.8 * len(facets), 4.4),
+    fig, axes = plt.subplots(1, len(facets),
+                             figsize=figsize or (8 if len(facets) == 1 else 2.8 * len(facets), 4.4),
                              dpi=160, sharey=True, squeeze=False, layout="constrained")
     top = df[df["valid"]][value_col].max()
 
@@ -169,7 +172,7 @@ def plot(
              unit, bar, log_scale, box, top, named=bool(x_col),
              hline=hline, hline_label=hline_label, whiskers=whiskers,
              xlabel=xlabel, subtitle=subtitle, legend_loc=legend_loc,
-             legend_anchor=legend_anchor)
+             legend_anchor=legend_anchor, peak_label=peak_label)
     if facet_col:
         handles, labels = axes[0][0].get_legend_handles_labels()
         fig.legend(handles, labels, loc="lower center", ncol=len(labels), bbox_to_anchor=(0.5, -0.12),
@@ -182,7 +185,8 @@ def plot(
 
 def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabel, unit,
          bar, log_scale, box, top, named=False, hline=None, hline_label=None, whiskers=False,
-         xlabel=None, subtitle=True, legend_loc="best", legend_anchor=None):
+         xlabel=None, subtitle=True, legend_loc="best", legend_anchor=None,
+         peak_label=True):
     axis = str(df["axis"].iloc[0])
     instance = str(df["instance"].iloc[0])
     stats = summarise(df, series_col, value_col)
@@ -293,7 +297,11 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
             col = c["series"][i % n_hue]
             shape = (i + i // n_hue) % n_hue
             pos = xof(g["axis_value"]) + (i - (len(groups) - 1) / 2) * width
-            err = [(g["mean"] - g["lo"]).tolist(), (g["hi"] - g["mean"]).tolist()]
+            # --whiskers is +-1 sd here as well as in the line branch below.
+            # The default stays min-max, which two reps make the same thing.
+            err = ([g["std"].tolist()] * 2 if whiskers
+                   else [(g["mean"] - g["lo"]).tolist(), (g["hi"] - g["mean"]).tolist()])
+            cap = (g["mean"] + g["std"]) if whiskers else g["hi"]
             ax.bar(pos, g["mean"], width, yerr=err, capsize=3, color=col,
                    hatch=HATCH[shape % len(HATCH)],
                    edgecolor=c["surface"], linewidth=0.8, label=name, zorder=3)
@@ -302,7 +310,7 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
             # 22-query suite draws 44 bars and the numbers become a band of
             # text across the middle of the plot, worse than the axis.
             if len(order) * len(groups) <= 12:
-                for xi, v, hi in zip(pos, g["mean"], g["hi"]):
+                for xi, v, hi in zip(pos, g["mean"], cap):
                     ax.annotate(f"{v:.1f}", (xi, hi), textcoords="offset points",
                                 xytext=(0, 3), ha="center", fontsize=7.5, zorder=4)
     else:
@@ -353,7 +361,7 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
             label="invalid run (excluded)",
         )
 
-    if not bar and not box and value_col == "gbps":
+    if peak_label and not bar and not box and value_col == "gbps":
         # Bars and boxes already show every value; this is the line case's only one.
         best = stats.loc[stats["mean"].idxmax()]
         ax.annotate(
@@ -398,14 +406,18 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
     ax.set_xlabel(xlabel or LABELS.get(axis, axis))
     if first:
         ax.set_ylabel(ylabel)
-    reps = int(stats["n"].max())
+    # Arms can carry different rep counts -- a noisy baseline needs more of
+    # them than a reproducible one -- and "mean of 6 runs" over a series with
+    # two is a false claim about the figure. Say the range when they differ.
+    lo, hi = int(stats["n"].min()), int(stats["n"].max())
+    reps = str(hi) if lo == hi else f"{lo}-{hi}"
     # Say what the marks mean, since a box and a mean-with-band are read
     # differently: the box is quartiles over reps, the band is min-max.
     spread = (
         f"{{}} · box is quartiles over {reps} runs, dots are the runs"
         if box
-        else ("{} · mean of " + str(reps) + " runs, whiskers are ±1 sd" if whiskers
-              else "{} · mean of " + str(reps) + " runs, band is min–max")
+        else ("{} · mean of " + reps + " runs, whiskers are ±1 sd" if whiskers
+              else "{} · mean of " + reps + " runs, band is min–max")
     )
     fixed = ", ".join(
         f"{k}={tick(k, df[k].iloc[0], axis_of_plot=False)}"
@@ -475,6 +487,15 @@ def main() -> int:
     )
     ap.add_argument("--legend-loc", default="best", help="matplotlib legend location")
     ap.add_argument(
+        "--no-peak", action="store_true",
+        help="drop the label on the highest point; a caption usually says it better",
+    )
+    ap.add_argument(
+        "--figsize", default=None, metavar="W,H",
+        help="figure size in inches; a paper column wants about 3.4,2.4 so the "
+             "type is still legible once it is scaled to \\columnwidth",
+    )
+    ap.add_argument(
         "--legend-anchor", default=None, metavar="X,Y",
         help="axes-fraction point the legend's --legend-loc corner is placed at, "
              "e.g. 0,0.89 to hang it under an --hline at 200 of a 224 axis",
@@ -506,7 +527,9 @@ def main() -> int:
     plot(df, out, mode, a.series, a.title, a.value_col, a.ylabel, a.unit,
          a.bar, a.log_scale, a.box, a.x, a.facet, a.hline, a.hline_label, a.whiskers,
          a.xlabel, not a.no_subtitle, a.legend_loc,
-         tuple(float(v) for v in a.legend_anchor.split(",")) if a.legend_anchor else None)
+         tuple(float(v) for v in a.legend_anchor.split(",")) if a.legend_anchor else None,
+         tuple(float(v) for v in a.figsize.split(",")) if a.figsize else None,
+         not a.no_peak)
     valid = int(df["valid"].sum())
     print(f"wrote {out} ({valid}/{len(df)} runs valid)")
     return 0

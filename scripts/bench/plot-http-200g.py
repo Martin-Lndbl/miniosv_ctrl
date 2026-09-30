@@ -77,9 +77,13 @@ ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "results" / "s3"
 
 ARMS = [
-    ("miniosv-http-200g-jumbo", "miniOSv", "#15aabf", "D", "-"),
+    # The two static-partition arms moved to archive/pre-shared-pool when the
+    # shared block pool landed; they are kept on the figure because they are
+    # the only miniOSv MTU pair that exists, and the pool arm beside them is
+    # what says the scheduler changed. See that directory's README.
+    ("archive/pre-shared-pool/miniosv-http-200g-jumbo", "miniOSv", "#15aabf", "D", "-"),
     ("miniosv-http-200g-jumbo-pool", "miniOSv (shared pool)", "#9c36b5", "v", ":"),
-    ("miniosv-http-200g", "miniOSv (MTU 1500)", "#0b7285", "o", "--"),
+    ("archive/pre-shared-pool/miniosv-http-200g", "miniOSv (MTU 1500)", "#0b7285", "o", "--"),
     ("linux-http-200g-capped", "Linux", "#c92a2a", "s", "-"),
     ("linux-http-200g-nogro1500", "Linux (MTU 1500)", "#e8590c", "^", "--"),
 ]
@@ -140,6 +144,10 @@ def main() -> int:
     for name, label, colour, marker, style in ARMS:
         rows = [r for r in load(name) if r["gbps"]]
         if not rows:
+            # Silence here once cost a figure two of its five curves: an arm
+            # whose CSV had been moved simply vanished, and the PDF looked
+            # complete. Say which one, on stderr.
+            print(f"  no rows for {name!r} -- curve {label!r} omitted", file=sys.stderr)
             continue
         drawn += 1
         x = [r["workers"] for r in rows]
