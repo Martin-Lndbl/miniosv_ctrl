@@ -63,7 +63,7 @@ class AnyBlob(LinuxS3):
         "scheme": ("BENCH_SCHEME", str),
         "url": ("BENCH_URL", str),
         # 0 = the machine as shipped; N confines the daemons and the NIC to N
-        # cores, by the same code competitors/wrk-http uses.
+        # cores, by the same code competitors/linux-http uses.
         "cpus": ("BENCH_CPUS", int),
         # stock = AL2023 as shipped; nogro = mininet's wire (GRO off, mtu 9001)
         "mode": ("MODE", str),
@@ -164,9 +164,7 @@ class AnyBlob(LinuxS3):
             "MODE": str(cfg["mode"]),
             "RUN_ID": run_id,
         }
-        body = (self.scripts_dir / "instance.py").read_text()
-        body = body.split("\n", 1)[1] if body.startswith("#!") else body
-        return "#!/usr/bin/env python3\nCONFIG = {}\n{}".format(json.dumps(conf), body)
+        return self.guest_script(conf)
 
     def valid(self, row: dict) -> bool:
         # The shared gate, plus the two checks the library's callback makes.

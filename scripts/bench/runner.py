@@ -396,6 +396,18 @@ class Bench:
     def add_arguments(self, ap: argparse.ArgumentParser) -> None:
         pass
 
+    def guest_script(self, conf: dict) -> str:
+        """CONFIG + the shared prelude + the bench's instance.py, as one
+        user-data program. The guest can import nothing that is not on the AMI,
+        so the helpers are concatenated rather than imported; `competitors/
+        common/instance_prelude.py` explains why they are shared at all."""
+        import json
+        prelude = (ROOT / "competitors/common/instance_prelude.py").read_text()
+        body = (self.scripts_dir / "instance.py").read_text()
+        body = body.split("\n", 1)[1] if body.startswith("#!") else body
+        return "#!/usr/bin/env python3\nCONFIG = {}\n{}\n{}".format(
+            json.dumps(conf), prelude, body)
+
     def build(self, cfg: dict, ip: str) -> None:
         raise NotImplementedError
 

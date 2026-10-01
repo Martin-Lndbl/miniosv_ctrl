@@ -123,10 +123,7 @@ class LinuxS3(Bench):
             "MODE": str(cfg["mode"]),
             "RUN_ID": run_id,
         }
-        body = (self.scripts_dir / "instance.py").read_text()
-        # Drop instance.py's own shebang; the one at the top wins.
-        body = body.split("\n", 1)[1] if body.startswith("#!") else body
-        return "#!/usr/bin/env python3\nCONFIG = {}\n{}".format(json.dumps(conf), body)
+        return self.guest_script(conf)
 
     def user_data_blob(self, cfg: dict, ip: str, run_id: str) -> bytes:
         """gzipped: instance.py is ~17 KB and EC2 caps user-data at 16.

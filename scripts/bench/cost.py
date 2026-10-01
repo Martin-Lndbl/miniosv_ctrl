@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 """What a set of runs cost: S3 requests, transfer, and instance time.
 
-    scripts/bench/cost.py results/tpch/*.csv
+    scripts/bench/cost.py results/*/*.csv
 
-Three lines matter and only one of them is usually the big one:
+S3 GET at $0.0004/1000 is usually the big line -- a 22-query sf=100 suite is
+~450k requests. Transfer is free while it stays in one AZ through the gateway
+endpoint; the cross-AZ and IGW figures are printed because both are one routing
+mistake away. Instance time is an estimate from the rows' own elapsed plus a
+boot allowance.
 
-  * **S3 GET** at $0.0004/1000. One TPC-H query at sf=100 is ~18k requests, so
-    a 22-query suite is ~400k -- $0.16 a suite, which on that workload is the
-    *majority* of the bill. A bandwidth bench issuing one GET per 32 MiB block
-    is nothing by comparison.
-  * **Transfer** is $0.00 as long as it stays in one AZ and goes through the
-    S3 gateway endpoint. Printed anyway, next to what the same bytes would
-    cost cross-AZ ($0.01/GB each way) or out an internet gateway ($0.09/GB),
-    because those are one routing mistake away and ~1 TiB is not unusual here.
-  * **Instances**, from the rows' own elapsed time plus a boot allowance,
-    billed per second with a 60 s minimum. An estimate: the CSV does not
-    record when the instance was launched or reaped.
+Boots whose rows carry no request count are named rather than billed at zero.
 """
 from __future__ import annotations
 

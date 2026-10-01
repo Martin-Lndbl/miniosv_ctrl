@@ -5,7 +5,7 @@ binary and blob, same block size and per-block connection policy; one row per
 run, with wrk's request rate and latency percentiles beside the wire rate and
 the client cpu the run consumed.
 
-    just bench competitors/wrk-http --sweep conns=64,128
+    just bench competitors/linux-http --sweep conns=64,128
 """
 from __future__ import annotations
 
@@ -29,11 +29,11 @@ assert _spec.loader
 _spec.loader.exec_module(_mod)
 LinuxS3 = _mod.LinuxS3
 
-BENCH = "competitors/wrk-http"
+BENCH = "competitors/linux-http"
 
 
 class WrkHttp(LinuxS3):
-    name = "wrk-http"
+    name = "linux-http"
     os_name = "linux"
     bench_path = BENCH
     scripts_dir = ROOT / BENCH / "scripts"
@@ -59,7 +59,7 @@ class WrkHttp(LinuxS3):
     }
     defaults = {"threads": 8, "conns": 128, "conns_per_cpu": 0, "duration": 30, "block": 128 << 20, "close": "1", "server": "c6in.8xlarge",
                 "cpus": 0, "mode": "stock"}
-    instance_tag = "miniosv-wrk-bench"
+    instance_tag = "miniosv-linux-http-bench"
     default_instance = "c6in.8xlarge"
     max_vm_seconds = 600
     metrics = {
@@ -90,7 +90,7 @@ class WrkHttp(LinuxS3):
         self.server: HttpServer | None = None
 
     def build(self, cfg: dict, ip: str) -> None:
-        super().build(cfg, ip)  # just setup competitors/wrk-http
+        super().build(cfg, ip)  # just setup competitors/linux-http
         if not cfg.get("server"):
             httpserver.verify_external(ip, os.environ.get("BENCH_ZONE"))
             # A long-living server (scripts/bench/nginx-server.py) dialled by
@@ -129,9 +129,7 @@ class WrkHttp(LinuxS3):
             "MODE": str(cfg["mode"]),
             "RUN_ID": run_id,
         }
-        body = (self.scripts_dir / "instance.py").read_text()
-        body = body.split("\n", 1)[1] if body.startswith("#!") else body
-        return "#!/usr/bin/env python3\nCONFIG = {}\n{}".format(json.dumps(conf), body)
+        return self.guest_script(conf)
 
     def run_once(self, instance: str, logdir: Path, cfg: dict, ip: str) -> dict:
         target = self.server.ip if self.server else ip

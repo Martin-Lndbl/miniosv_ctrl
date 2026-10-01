@@ -1,59 +1,22 @@
 name = "miniosv"
 title = "DuckDB-on-miniOSv: all 22 TPC-H queries at sf=100 on r6in.8xlarge"
 description = """
-The miniOSv arm of the sf=100 head-to-head, paired with sf100-suite-r6in/linux.
-Same instance type, same scale factor, same 22 queries, two reps a side, and
-each arm at its own tuned operating point rather than a shared one.
+The unikernel arm of the sf=100 head-to-head, paired with
+sf100-suite-r6in/linux. Each arm at its own tuned point, not a shared one:
+`workers=4 conns=128 threads=256` here, `threads=128` there. GRO off on the
+Linux side so both count one frame per datagram; jumbo on both.
 
-**The operating point, and what it cost to find it** (2026-09-30, five queries
-1/8/9/13/21, one rep a point, 16 boots, \\$0.84):
+Both oversubscribe the 32 cores but not the same resource. Linux's thread
+count is its only depth knob -- httpfs opens a connection per thread -- so 128
+threads is 4x CPU *and* 128 requests in flight. Here depth is workers x conns,
+capped by threads at 256, so the threads oversubscribe CPU alone; four cores
+are owned by busy-polling workers, leaving DuckDB 28 (9.1x, not 8x).
 
-| knob | swept | chosen |
-|---|---|---|
-| threads (w=8, c=64) | 128 / 256 / 512 -> 37300 / 32297 / 32831 ms | **256** |
-| conns (w=8, t=256) | 16 / 32 / 128 -> 33436 / 32729 / 28422 ms | **128** |
-| workers (t=256) | w2c512 / w4c128 / w4c256 / w8c128 -> 32673 / 27780 / 34150 / 28422 | **4** |
+**Two reps against Linux's twelve, deliberately.** Two runs here agree to 0.1%
+over 22 queries; twelve there span 32%, and that spread does not shrink with
+samples. Quote nothing from a single pairing.
 
-512 threads is within 1.7% of 256, so that one is a tie broken toward the
-cheaper number. `workers` is the knob that needed the most care: mininet's
-pollers busy-poll without yielding, so four of them is 12.5% of this machine
-against the 25% eight would take, and the DuckDB side gets the difference.
-
-**w=4 beats w=8 by only 2.3%, which is inside the noise -- but it is not
-chosen on that.** A TLS-off repeat of the same three shapes ranks them the
-same way and by a wider margin: 25224 (w4c128) against 31981 (w8c128) and
-31072 (w2c512). Two runs, two workloads, one winner.
-
-**Read no margin under ~10% off this suite.** The TLS/HTTP 2x2 that produced
-those numbers also contains an impossibility -- at w=8, *removing* decryption
-came out 12.5% slower -- so roughly a tenth of a run moves for reasons the
-knobs do not explain. The likeliest cause is the front-end lottery: DNS
-resolves per worker, a jumbo-serving S3 front-end is worth about 2x against
-one that caps at 1514, and a four-worker run draws four times. Left unpinned
-deliberately -- both arms draw from the same pool, so it is symmetric noise
-and not bias, and a pinned number is not what a deployment gets. See
-`s3-frontends-disagree-on-jumbo` in the session memory.
-
-Jumbo is on because it is the default since 2026-09-29; the Linux arm sets
-`gro=off` so that both stacks count one frame per datagram and the receive
-paths are doing the same work.
-
-Two reps of the 22 queries in one boot each, not the three-turns-per-query
-(cold/heated/warm) shape the c6in.16xlarge suite used. Each rep is a fresh
-instance, so warmth comes only from the queries ahead of it in the same pass
--- identical on both arms, since they run the same list in the same order.
-Q01 is the only genuinely cold query of a pass; every later one reads
-lineitem ranges its predecessors have already pulled, which drops S3's
-first-byte time from ~42 to ~24 ms.
-
-`keep_going` so a query that fails or hits the vm cap is one invalid row
-rather than the end of the suite. sf=100 has no canned answers, so `match`
-reads unchecked -- correctness rests on the sf=1 suite.
-
-    just plot results/sf100-suite-r6in/miniosv.csv results/sf100-suite-r6in/linux.csv \\
-        --series note --box --value-col query_ms --ylabel "Query latency (ms)"
-
-S3 cost: ~450k GET requests a rep, so ~\\$0.36 for this arm's two.
+Result: 2.26x geometric mean, faster on 22/22.
 """
 
 bench    = "apps/bench/duckdb-tpch"

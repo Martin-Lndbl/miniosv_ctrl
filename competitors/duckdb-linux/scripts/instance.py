@@ -1,63 +1,19 @@
 #!/usr/bin/env python3
-"""EC2 user-data for the DuckDB-on-Linux competitor; runs as root under
-cloud-init. Real DuckDB, real sockets, real OpenSSL -- the baseline
-apps/bench/duckdb-tpch is measured against.
+"""DuckDB on stock AL2023 against S3: the Linux arm of the TPC-H comparison.
 
-fetch duckdb + httpfs -> create the 8 TPC-H views over the same S3 bucket ->
-run each requested query, timed -> compare against tpch_answers() -> print ->
-wait to be reaped.
-
-The driver prepends a `CONFIG = {...}` literal; run directly it falls back to
-the environment, which is what a local dry-run uses:
-
-    BENCH_LOCAL=1 BENCH_WORK=/tmp/w AWS_BUCKET=... AWS_REGION=... \
-    BENCH_SF=1 BENCH_QUERIES=6 python3 scripts/instance.py
-
-No SSH, no keypairs: results come back on the serial console. The driver
-terminates the instance once it has read them; a `shutdown -h +15` scheduled
-at the end backstops a driver that dies first. Stdlib only -- no pip on the
-instance, and no route to one.
-
-Prints the same log-line shapes apps/miniduckdb/miniosv/main.cc's tpch
-executable does (Q06: ... ms, ... rows, match=...  /  TPCH SUMMARY: ...  /
-COMPLETE|INCOMPLETE: ...), so scripts/bench/duckdb-linux/bench.py's regexes
-and scripts/bench/duckdb-tpch/bench.py's land in directly comparable CSV
-columns.
+Fetches duckdb + httpfs from the bucket, runs the queries, and prints the rows
+the driver scrapes. `httplog=1` adds a logged second pass; `netphase=1` runs
+that pass under an LD_PRELOAD shim so a request splits into S3 turnaround,
+body, and what the client adds.
 """
 
 # No `from __future__ import annotations`: the driver injects a CONFIG
 # literal ahead of this file, and a future import may only be preceded by
 # the docstring.
 import json
-import os
-import re
-import shutil
-import subprocess
-import sys
-import time
-import urllib.request
-
-try:                    # injected by the driver ahead of this file
-    CONFIG              # type: ignore[used-before-def]  # noqa: B018
-except NameError:
-    CONFIG = {}
 
 
-def cfg(key, default=""):
-    v = CONFIG.get(key, os.environ.get(key, default))
-    return "" if v is None else str(v)
-
-
-def say(text=""):
-    print(text, flush=True)
-
-
-LOCAL = cfg("BENCH_LOCAL", "0") == "1"
-WORK = cfg("BENCH_WORK", "/run")
-BUCKET, REGION = cfg("AWS_BUCKET"), cfg("AWS_REGION")
-HOST = "{}.s3.{}.amazonaws.com".format(BUCKET, REGION)
 SCHEME = cfg("BENCH_SCHEME", "https") or "https"
-ENDPOINT = "{}://{}".format(SCHEME, HOST)
 
 # An S3 front-end to pin the bucket to, when the other arm is pinned too;
 # empty resolves normally, which is the default on both.

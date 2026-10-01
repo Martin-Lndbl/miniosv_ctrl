@@ -1,25 +1,12 @@
 #!/usr/bin/env python3
-"""Queue experiments on spot instances, detached from the shell that asked.
+"""Run experiments on spot instances, detached from the shell.
 
-    just queue miniosv-sf10-query linux-sf10-query-parity               # one after the other
-    just queue miniosv-sf10-query linux-sf10-query-parity --interleave  # rep-major across them
-    just queue miniosv-tls-100g anyblob-tls-100g --concurrent           # both arms at once, point by point
-    just queue a,b c,d --concurrent      # group a,b first (a and b side by side), then group c,d
-    just queue miniosv-tls-100g --reps 1 --ttl 90m --dry-run            # the checks, no runner
-    just queue-status
-    just queue-stop
+    just queue a b --interleave      # rep-major across them, so drift hits all
+    just queue a,b c,d --concurrent  # a and b side by side, then c and d
 
-Every check runs before anything detaches: credentials, the bucket's region,
-the subnet and its S3 gateway endpoint, each experiment's plan, the blob the
-S3 benches read, no queue already running, no instance of ours already up.
-Then a runner starts in its own session and outlives this shell. It runs the
-experiments with `--market spot` (interleaved, or with --concurrent every arm
-of a point on its own instance at the same time, so the arms of a comparison
-see the same minute of S3 rather than the same hour), waits ten minutes and tries again whenever
-no zone has a spot instance, and stops itself at the TTL (five hours unless
-told otherwise, six at most): it ends the experiment it is in, terminates
-every instance of ours launched since the queue began, and deregisters the
-images they booted from. State and logs are under results/queue/<id>/.
+Comma-joined names share a group; space-separated ones are separate groups that
+run one after another. Retries while spot is refused, stops itself at the ttl,
+and sweeps its instances and images on the way out.
 """
 
 from __future__ import annotations

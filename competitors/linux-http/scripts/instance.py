@@ -11,30 +11,8 @@ run directly it falls back to the environment:
     python3 scripts/instance.py
 """
 
-import os
-import re
-import shutil
-import subprocess
-import sys
-import time
-import urllib.request
 
-try:
-    CONFIG  # type: ignore[used-before-def]  # noqa: B018
-except NameError:
-    CONFIG = {}
-
-
-def cfg(key, default=""):
-    v = CONFIG.get(key, os.environ.get(key, default))
-    return "" if v is None else str(v)
-
-
-LOCAL = cfg("BENCH_LOCAL", "0") == "1"
-WORK = cfg("BENCH_WORK", "/run")
-RUN_ID = cfg("RUN_ID", "unknown")
-ENDPOINT = "https://{}.s3.{}.amazonaws.com".format(cfg("AWS_BUCKET"), cfg("AWS_REGION"))
-BIN_PREFIX = cfg("BENCH_BIN_PREFIX", "bin/wrk-http")
+BIN_PREFIX = cfg("BENCH_BIN_PREFIX", "bin/linux-http")
 TARGET = cfg("AWS_TARGET_IP")
 THREADS = cfg("BENCH_THREADS", "8")
 CONNS = cfg("BENCH_CONNS", "128")
@@ -54,45 +32,6 @@ CPUS = int(cfg("BENCH_CPUS", "0") or 0)
 MODE = cfg("MODE", "stock")
 BIN = os.path.join(WORK, "wrk")
 LUA = os.path.join(WORK, "range.lua")
-
-_console = None
-if not LOCAL:
-    try:
-        _console = open("/dev/console", "w")
-    except OSError:
-        pass
-
-
-def say(text=""):
-    for sink in (sys.stdout, _console):
-        if sink is not None:
-            try:
-                sink.write(text + "\n")
-                sink.flush()
-            except OSError:
-                pass
-
-
-def run(*cmd):
-    return subprocess.run(cmd, capture_output=True, text=True).stdout
-
-
-def read(path, default=""):
-    try:
-        with open(path) as fh:
-            return fh.read().strip()
-    except OSError:
-        return default
-
-
-def write(path, value):
-    try:
-        with open(path, "w") as fh:
-            fh.write(str(value))
-        return True
-    except OSError as e:
-        say("             : {} not written ({})".format(path, e))
-        return False
 
 
 def match_mininet(iface):
@@ -114,77 +53,6 @@ def match_mininet(iface):
     say("             : mtu {} now, {}, route {}".format(
         read(mtu), gro[0] if gro else "gro unknown",
         "quickack" if "quickack" in run("ip", "route", "show", "default") else "no quickack"))
-
-
-def gro_off(iface):
-    """Receive aggregation removed and nothing else -- the MTU stays at 9001.
-
-    `parity` drops to 1500 as well, which was the honest wire while minidpdk's
-    mbuf data room was a constexpr 1536. It is 9216 since 2026-09-29 and the
-    unikernel negotiates a 9001 MTU, so the comparable Linux client is the core
-    budget with GRO off and the frame size left alone. Combine with `cpus`.
-    """
-    mtu = read("/sys/class/net/{}/mtu".format(iface))
-    say("nogro        : GRO off, mtu {} left alone".format(mtu))
-    run("ethtool", "-K", iface, "gro", "off")
-    run("ethtool", "-K", iface, "lro", "off")
-    gro = [l for l in run("ethtool", "-k", iface).splitlines()
-           if l.startswith("generic-receive-offload")]
-    say("             : {}, mtu {}".format(gro[0] if gro else "gro unknown", mtu))
-
-
-def cap_cores(iface, n):
-    """As competitors/linux-s3's capped mode does it: irqbalance off, one
-    channel per core of the budget, IRQs and XPS on those cores. wrk itself is
-    confined by taskset, so no softirq or user thread lands outside them."""
-    say("cap          : {} cores, {} channels, IRQs and XPS on 0-{}".format(n, n, n - 1))
-    run("systemctl", "stop", "irqbalance")
-    run("ethtool", "-L", iface, "combined", str(n))
-    pinned = 0
-    for line in read("/proc/interrupts").splitlines():
-        if iface in line and ":" in line:
-            irq = line.split(":", 1)[0].strip()
-            if irq.isdigit():
-                try:
-                    with open("/proc/irq/{}/smp_affinity_list".format(irq), "w") as fh:
-                        fh.write(str(pinned % n))
-                    pinned += 1
-                except OSError:
-                    pass
-    xps, qdir = 0, "/sys/class/net/{}/queues".format(iface)
-    for q in sorted(os.listdir(qdir) if os.path.isdir(qdir) else []):
-        if q.startswith("tx-"):
-            try:
-                with open("{}/{}/xps_cpus".format(qdir, q), "w") as fh:
-                    fh.write(format(1 << (xps % n), "x"))
-                xps += 1
-            except OSError:
-                pass
-    say("             : {} IRQs pinned, XPS on {} tx queues, channels now {}".format(
-        pinned, xps, run("ethtool", "-l", iface).count("Combined") and
-        [ln.split()[-1] for ln in run("ethtool", "-l", iface).splitlines() if "Combined" in ln][-1]))
-
-
-def default_route():
-    for line in run("ip", "-o", "-4", "route", "show", "default").splitlines():
-        f = line.split()
-        if "dev" in f:
-            return f[f.index("dev") + 1]
-    return ""
-
-
-def imds(path):
-    try:
-        req = urllib.request.Request(
-            "http://169.254.169.254/latest/api/token", method="PUT",
-            headers={"X-aws-ec2-metadata-token-ttl-seconds": "300"})
-        token = urllib.request.urlopen(req, timeout=3).read().decode()
-        req = urllib.request.Request(
-            "http://169.254.169.254/latest/meta-data/" + path,
-            headers={"X-aws-ec2-metadata-token": token})
-        return urllib.request.urlopen(req, timeout=3).read().decode()
-    except Exception:
-        return ""
 
 
 def fetch(name, dest, mode=0o644):
@@ -226,7 +94,7 @@ def main():
     iface = default_route()
     rc = 1
     try:
-        say("=== wrk-http ===")
+        say("=== linux-http ===")
         say("run id       : " + RUN_ID)
         say("target       : http://{}/blob.bin".format(TARGET))
         say("shape        : {} threads x {} conns, {} s, {} byte blocks, close={}".format(

@@ -1,48 +1,23 @@
 name = "linux"
 title = "DuckDB on Linux at sf=100 on r6in.8xlarge: a request's split, measured at the socket"
 description = """
-The Linux half of the overhead breakdown, to stand beside the miniOSv arm in
-`scripts/bench/breakdown.py`. miniOSv times every request itself, so its bars
-come free out of the suite CSV; Linux needs instrumenting, which is what this
-run is for and why it is a separate experiment rather than a knob on the
-suite.
+The kernel half of the overhead breakdown. `httplog=1` adds a logged pass
+giving each request's whole life above the client; `netphase=1` runs it under
+an LD_PRELOAD shim stamping every socket send and receive, so the life splits
+the three ways mininet reports. Runs concurrently with the miniOSv arm.
 
-`httplog=1` adds a second pass per query with DuckDB's HTTP request log on,
-giving each request's whole life above the client. `netphase=1` runs that pass
-under `competitors/duckdb-linux/netphase`, an LD_PRELOAD shim that stamps
-every socket send and receive, so the life splits the same three ways the
-miniOSv worker reports: S3's turnaround, the body on the wire, and what the
-client and stack add.
+Result: stack and HTTP client are 20.2% of wall here against 5.9% there.
 
-**Runs concurrently with the miniOSv arm, and that is the point.** A
-per-request breakdown's S3 segment belongs to S3, not to the client, so the
-two arms must face the same S3 at the same moment; the previous attempt at
-this figure had them 64% apart on that segment with two unseparated causes,
-one of which was running at different times. `--concurrent` puts each arm on
-its own instance simultaneously, which the quota allows at 8xlarge (it did not
-at 16xlarge, where it silently degraded to interleaving).
+Two caveats, both inflating this arm's stack band. Instrumenting costs time
+that lands in the same residual the stack is measured from -- correlation 0.60
+between a query's overhead and its reported stack share, and Q02 ran +220% and
+should be discarded (the 16 queries under +20% still average 19.7%). And
+`np_hs_ms_avg` is not believable (35-129 ms for one or two intra-region round
+trips), so it is excluded from the turnaround and falls into the residual,
+worth 5.5% of a request; attributed correctly this arm is nearer 15%.
 
-The other half of that gap was in-flight depth: ttfb rises with concurrency,
-so the arm holding more requests open shows a *larger* S3 segment per request
-for reasons that are nothing to do with its stack. Read the bands as
-proportions of an arm's own bar, never as one arm's segment against the
-other's.
-
-Two defects fixed in `breakdown.py` before this runs, both Linux-side:
-the bar is now the **clean** pass's `query_ms` with the logged pass supplying
-only proportions (instrumenting cost +3.0/+12.2/+46.1% on three earlier
-sf=100 reps, so the old bar was up to half again too tall); and the
-`np_hs_ms_avg` handshake -- 348-411 ms, which no intra-region TLS handshake
-takes -- is no longer folded into the turnaround.
-
-One rep: this figure is about proportions, which the earlier work showed are
-stable across scale factors (stack 0.8% miniOSv / 29.8% Linux at sf=100
-against 0.7% / 26.5% at sf=10) even where bar heights are not.
-
-    scripts/bench/breakdown.py results/sf100-suite-r6in/miniosv.csv \\
-        --linux results/sf100-breakdown-r6in/linux.csv
-
-S3 cost: two passes a query, so ~900k GET requests, about \\$0.36.
+The bar is the clean pass's `query_ms`; the logged pass supplies proportions
+only.
 """
 
 bench    = "competitors/duckdb-linux"

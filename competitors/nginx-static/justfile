@@ -1,6 +1,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# The static file server the HTTP load benches dial: competitors/wrk-http and
+# The static file server the HTTP load benches dial: competitors/linux-http and
 # apps/bench/smoltcp-s3 with server=<instance type>. Bench instances have no
 # package mirror, so the binary is built here with nix and fetched from the
 # bucket at boot, unsigned through the VPC endpoint like every bench binary.

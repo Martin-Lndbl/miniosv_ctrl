@@ -1,26 +1,14 @@
 #!/usr/bin/env python3
-"""A static nginx that outlives one experiment, for a whole suite to dial.
+"""Start, inspect and stop a long-living nginx for the bandwidth sweeps.
 
-    scripts/bench/nginx-server.py start --client r6in.32xlarge
-    scripts/bench/nginx-server.py status
-    scripts/bench/nginx-server.py stop
+A `server` type in an experiment launches one per point, which is what makes
+`just reproduce` work alone; for a sweep that is a second r6in.32xlarge against
+the same spot quota the client needs. This keeps one alive instead:
 
-Why: `server = "<type>"` in an experiment launches one nginx a point and tears
-it down after, which is right for a single comparison and wrong for a sweep.
-Two r6in.32xlarge is 256 of an account's 300 spot vCPUs, so the per-point
-server and the next point's client fight for the same quota -- and a refused
-client leaves the server it just launched to drain, which refuses the retry in
-turn. Measured 2026-09-30: four attempts at one point, four wasted server
-launches, no data.
+    nginx-server.py start --client r6in.32xlarge
+    BENCH_ZONE=<zone> just reproduce <experiment> --target-ip <ip>
 
-The zone is picked by the **client's** spot odds, not the server's, because the
-client is pinned to wherever the server landed (same-zone traffic is free and a
-hop shorter). Pass --client so that ranking is the right one; the harness then
-reports the zone to pin experiments to.
-
-State lives in results/http/nginx-server.json so `status` and `stop` work from
-any shell. `start` deliberately unregisters HttpServer's atexit hook -- the
-whole point is that it survives the process.
+State lives in results/http/nginx-server.json. It bills until `stop`.
 """
 from __future__ import annotations
 

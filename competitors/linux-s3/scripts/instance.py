@@ -19,32 +19,9 @@ once it has read them; a timed shutdown backstops a forgotten run. Stdlib only
 # literal ahead of this file, and a future import may only be preceded by
 # the docstring — it would make the generated user-data a SyntaxError.
 # json is used only when the driver injects CONFIG; keep the import local.
-import os
-import re
-import shutil
-import subprocess
-import sys
-import time
-import urllib.request
-
-try:                    # injected by the driver ahead of this file
-    CONFIG              # type: ignore[used-before-def]  # noqa: B018
-except NameError:
-    CONFIG = {}
 
 
-def cfg(key, default=""):
-    """Driver-injected value, else the environment, else a default."""
-    v = CONFIG.get(key, os.environ.get(key, default))
-    return "" if v is None else str(v)
-
-
-LOCAL = cfg("BENCH_LOCAL", "0") == "1"
-WORK = cfg("BENCH_WORK", "/run")
 MODE = cfg("MODE", "stock")
-RUN_ID = cfg("RUN_ID", "unknown")
-BUCKET, REGION = cfg("AWS_BUCKET"), cfg("AWS_REGION")
-ENDPOINT = "https://{}.s3.{}.amazonaws.com".format(BUCKET, REGION)
 BIN = os.path.join(WORK, "linux-s3")
 
 # Per-connection receive buffer, matching the smoltcp side's fixed 4 MiB rx ring.
@@ -55,96 +32,15 @@ NQ = int(cfg("BENCH_WORKERS", "8") or 8)
 
 # Allowlist: the full delta was ~60 lines of per-queue byte counts saying
 # nothing the aggregate does not. These change how a run is *read*.
-KEEP = re.compile(
-    r"^(Tcp:(ActiveOpens|InSegs|OutSegs|RetransSegs|InErrs|AttemptFails|EstabResets)"
-    r"|Ip:(InReceives|InDiscards|InHdrErrors)|Udp:InErrors"
-    r"|rx_packets|tx_packets|rx_bytes|tx_bytes|rx_drops|tx_drops|rx_overruns"
-    r"|.*allowance_exceeded)$")
 
 
 # Everything funnels through say(), so the console sees the run in order,
 # interleaved with the binary's own stdout.
 
-_console = None
-if not LOCAL:
-    try:
-        _console = open("/dev/console", "w")
-    except OSError:
-        pass
-_logfile = open(os.path.join(WORK, "linux-s3.log"), "a") if os.path.isdir(WORK) else None
-
-
-def say(text=""):
-    for sink in (sys.stdout, _console, _logfile):
-        if sink is not None:
-            try:
-                sink.write(text + "\n")
-                sink.flush()
-            except OSError:
-                pass
-
-
-def rule(title):
-    say()
-    say("=== {} ===".format(title))
-
-
-def run(*cmd, **kw):
-    """stdout, never raising: a missing tool costs a fingerprint line, not the
-    run."""
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=kw.get("timeout", 60))
-        return (r.stdout or "") + (r.stderr or "" if kw.get("stderr") else "")
-    except (OSError, subprocess.SubprocessError) as e:
-        return "({}: {})".format(cmd[0], e)
-
-
-def write(path, value):
-    """sysfs/procfs knob; True on success, so the caller reports what applied
-    rather than what was attempted."""
-    try:
-        with open(path, "w") as fh:
-            fh.write(str(value))
-        return True
-    except OSError:
-        return False
-
-
-def read(path, default=""):
-    try:
-        with open(path) as fh:
-            return fh.read().strip()
-    except OSError:
-        return default
-
 
 # ---------------------------------------------------------------------------
 # Fingerprint
 # ---------------------------------------------------------------------------
-
-def default_route():
-    """(interface, gateway) from the main routing table."""
-    for line in run("ip", "-o", "-4", "route", "show", "default").splitlines():
-        f = line.split()
-        if "dev" in f and "via" in f:
-            return f[f.index("dev") + 1], f[f.index("via") + 1]
-    return "", ""
-
-
-def imds(path):
-    """IMDSv2. Silent on failure: running off-instance is supported."""
-    try:
-        req = urllib.request.Request(
-            "http://169.254.169.254/latest/api/token", method="PUT",
-            headers={"X-aws-ec2-metadata-token-ttl-seconds": "300"})
-        token = urllib.request.urlopen(req, timeout=3).read().decode()
-        req = urllib.request.Request(
-            "http://169.254.169.254/latest/meta-data/" + path,
-            headers={"X-aws-ec2-metadata-token": token})
-        return urllib.request.urlopen(req, timeout=3).read().decode()
-    except Exception:
-        return ""
-
 
 def fingerprint(iface, gw):
     rule("run")
@@ -196,23 +92,6 @@ def fingerprint(iface, gw):
             say(line)
 
 
-def channels(iface):
-    cur = mx = "?"
-    section = None
-    for line in run("ethtool", "-l", iface).splitlines():
-        if line.startswith("Pre-set"):
-            section = "max"
-        elif line.startswith("Current"):
-            section = "cur"
-        elif line.startswith("Combined:"):
-            v = line.split(":", 1)[1].strip()
-            if section == "max":
-                mx = v
-            elif section == "cur":
-                cur = v
-    return "{} combined of {} max".format(cur, mx)
-
-
 # The six knobs, each removing an advantage Linux has that smoltcp does not.
 # Idempotent, and every step reports before -> after: a knob that silently
 # failed to apply is a wrong measurement, not a slow one. The per-socket half is
@@ -225,60 +104,6 @@ def step(title):
 
 def show(label, value):
     say("   {:<12} {}".format(label, value))
-
-
-def cap_cores(iface):
-    """The unikernel gets 8 RSS queues, so letting Linux have all 32 cores
-    is not a comparison. Used by both capped and parity."""
-    # One queue per worker, connections pinned to the core handling it — the
-    # closest analogue to one smoltcp worker owning one RSS queue.
-    step("irqbalance off, {} channels, IRQs and XPS on cores 0-{}".format(NQ, NQ - 1))
-    run("systemctl", "stop", "irqbalance")
-    show("before", channels(iface))
-    run("ethtool", "-L", iface, "combined", str(NQ))
-    show("after", channels(iface))
-
-    # ENA's IRQ naming is not guaranteed (docs ❓6): match loosely, report what
-    # was found.
-    pinned = 0
-    for line in read("/proc/interrupts").splitlines():
-        if iface in line and ":" in line:
-            irq = line.split(":", 1)[0].strip()
-            if irq.isdigit() and write(
-                    "/proc/irq/{}/smp_affinity_list".format(irq), pinned % NQ):
-                pinned += 1
-    show("irqs", "pinned {} matching '{}'".format(pinned, iface))
-    if pinned == 0:
-        show("WARNING", "no ENA IRQs matched in /proc/interrupts (docs ❓6)")
-
-    xps = 0
-    qdir = "/sys/class/net/{}/queues".format(iface)
-    for q in sorted(os.listdir(qdir) if os.path.isdir(qdir) else []):
-        if q.startswith("tx-") and write(
-                "{}/{}/xps_cpus".format(qdir, q), format(1 << (xps % NQ), "x")):
-            xps += 1
-    show("xps", "set on {} tx queues".format(xps))
-
-
-def gro_off(iface):
-    """Turn off receive aggregation, and nothing else.
-
-    The one thing smoltcp has no equivalent of: the kernel coalescing many
-    frames into one skb before the stack sees them. Measured 2026-09-29 as
-    18-29 KB per IP datagram with it on against ~1.4 KB with it off, on
-    1500-byte frames both ways -- S3 does not offer jumbo, so the MTU step
-    elsewhere in match_smoltcp changes nothing on the wire.
-    """
-    def offloads():
-        return " ".join(l for l in run("ethtool", "-k", iface).splitlines()
-                        if l.startswith(("generic-receive-offload",
-                                         "large-receive-offload")))
-
-    step("GRO off (smoltcp has no receive aggregation)")
-    show("before", offloads())
-    run("ethtool", "-K", iface, "gro", "off")
-    show("after", offloads())
-    show("tso", "left as-is, receive-side workload")
 
 
 def mtu_1500(iface):
@@ -352,27 +177,6 @@ def match_smoltcp(iface):
 # The analogue of the bench's `nic rx`/`nic tx` lines: a frame the device
 # dropped never reaches the stack, and is indistinguishable from one never sent.
 
-def counters(iface):
-    out = {}
-    # snmp alternates header/value lines per protocol:
-    # "Ip: Forwarding DefaultTTL ..." then "Ip: 1 64 ...".
-    header = {}
-    for line in read("/proc/net/snmp").splitlines():
-        proto, _, rest = line.partition(":")
-        fields = rest.split()
-        if proto not in header:
-            header[proto] = fields
-        else:
-            for name, value in zip(header[proto], fields):
-                out["{}:{}".format(proto, name)] = int(value)
-    for line in run("ethtool", "-S", iface).splitlines():
-        name, _, value = line.partition(":")
-        name, value = name.strip(), value.strip()
-        if value.isdigit():
-            out[name] = int(value)
-    return out
-
-
 def cpu_times():
     """Per-cpu busy jiffies from /proc/stat: everything but idle and iowait."""
     out = {}
@@ -411,22 +215,6 @@ def report_cpu(before, after, elapsed_s):
     # unikernel's so one regex serves both.
     print("CPU: cpus={} cpu_s={:.1f} elapsed={:.3f} cores_over_50pct={}".format(
         len(busy), total, elapsed_s, active), flush=True)
-
-
-def report_counters(before, after):
-    rule("counters")
-    for name in sorted(before):
-        if name not in after or not KEEP.match(name):
-            continue
-        delta = after[name] - before[name]
-        if delta:
-            say("{:<30} {:+14d}   ({} -> {})".format(
-                name, delta, before[name], after[name]))
-    # Non-zero means EC2 shaped the run; tagged so the driver can find it.
-    # Recorded, not disqualifying: the transfer is still complete and exact.
-    for name, value in sorted(after.items()):
-        if name.endswith("allowance_exceeded") and value > 0:
-            say("{:<30} {:>14d}   <-- EC2 SHAPED".format(name, value))
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +336,7 @@ def main():
         if MODE not in ("stock", "capped", "parity", "nogro", "nogro1500"):
             say("WARNING: unknown MODE={} — running as stock".format(MODE))
         if MODE in ("capped", "parity", "nogro", "nogro1500"):
-            cap_cores(iface)
+            cap_cores(iface, NQ)
         if MODE == "parity":
             match_smoltcp(iface)
         # capped minus receive aggregation and nothing else, to separate what

@@ -9,7 +9,7 @@ against 83.5 Gbit/s at 8.4 busy cores against 16.
 
 No client code was needed: main.cpp already took BENCH_URL and
 BENCH_SCHEME=http. What was missing was the core budget, so `gro_off` and
-`cap_cores` are lifted **verbatim** from competitors/wrk-http and the binary
+`cap_cores` are lifted **verbatim** from competitors/linux-http and the binary
 runs under taskset -- two Linux arms shaped by one piece of code, or the axis
 means a different thing on each. Depth is 64 a core, as the others.
 

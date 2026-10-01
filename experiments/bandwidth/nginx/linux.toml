@@ -20,7 +20,7 @@ A `server` type launches an nginx per point, which is what makes
 with `server` set to "" so the point does not launch its own.
 """
 
-bench    = "competitors/wrk-http"
+bench    = "competitors/linux-http"
 instance = "r6in.32xlarge"
 axis     = "cpus"
 grid     = { cpus = [2, 4, 8, 16, 32] }

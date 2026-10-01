@@ -243,9 +243,7 @@ class DuckdbLinux(Bench):
             "BENCH_SCHEME": str(cfg.get("scheme") or ""),
         }
         conf.update(self.extra_conf(cfg))
-        body = (self.scripts_dir / "instance.py").read_text()
-        body = body.split("\n", 1)[1] if body.startswith("#!") else body
-        return "#!/usr/bin/env python3\nCONFIG = {}\n{}".format(json.dumps(conf), body)
+        return self.guest_script(conf)
 
     def user_data_blob(self, cfg: dict, ip: str = "") -> bytes:
         raw = self.user_data(cfg, ip).encode()
