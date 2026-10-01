@@ -1,0 +1,40 @@
+name = "linux"
+title = "GETs from S3 on a 200 Gbps wire: the Linux arm, 2 to 32 cores"
+description = """
+The kernel arm of the S3 bandwidth figure, paired with s3/miniosv and
+s3/anyblob. `mode = "nogro"` caps the cores to the worker count (one queue a
+worker, IRQs and XPS on cores 0..N-1) and removes receive aggregation, keeping
+delayed ACK and rmem autotuning -- the pool-nogro shape.
+
+32 MiB ranged GETs, plain HTTP, 64 connections a worker, 256 blocks a worker
+from a shared pool, unpinned so each worker resolves S3 itself, `nogro` with
+the MTU left at the ENA default of 9001 so jumbo stays in play. The same shape
+as the nginx arm of the same name; only the endpoint differs -- and nginx is
+one private address, pinned by construction, where S3 is many front-ends and
+the resolver is left to do its job.
+"""
+
+bench    = "competitors/linux-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [2, 4, 8, 16, 32] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+
+value_col = "gbps"
+ylabel    = "Gbps (payload, whole run)"
+unit      = "Gbps"
+series    = "note"
+
+[fixed]
+conns  = 64
+blocks = 256
+block  = "32M"
+mode   = "nogro"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "Linux"

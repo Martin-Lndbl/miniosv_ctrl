@@ -1,17 +1,17 @@
-name = "miniosv-sf100-breakdown-r6in"
+name = "miniosv"
 title = "DuckDB-on-miniOSv at sf=100 on r6in.8xlarge: the arm that stands beside the Linux breakdown"
 description = """
 The miniOSv half of the overhead breakdown. It is the suite's configuration
 exactly -- `workers=4, conns=128, threads=256` -- and needs no instrumentation
 knob, because the mininet worker already stamps every request's turnaround and
-body. So why a separate experiment at all, when miniosv-sf100-suite-r6in
+body. So why a separate experiment at all, when sf100-suite-r6in/miniosv
 already holds two clean reps of the same thing?
 
 **Because the S3 segment is only comparable if the two arms face S3 at the
 same moment.** A request's turnaround belongs to S3, not to the client, and
 the earlier attempt at this figure had the arms 64% apart on it -- with two
 unseparated causes, one of which was simply having run at different times. So
-this exists to be the thing `--concurrent` pairs with linux-sf100-breakdown-r6in:
+this exists to be the thing `--concurrent` pairs with sf100-breakdown-r6in/linux:
 each on its own instance, both dialling the same bucket in the same minutes.
 Writing to its own CSV rather than resuming the suite's is what lets both arms
 start from rep 1 together.
@@ -25,8 +25,8 @@ segment against the other's.
 One rep, since this figure is about proportions rather than bar heights, and
 those proved stable across scale factors in the earlier work.
 
-    scripts/bench/breakdown.py results/tpch/miniosv-sf100-breakdown-r6in.csv \\
-        --linux results/tpch/linux-sf100-breakdown-r6in.csv
+    scripts/bench/breakdown.py results/sf100-breakdown-r6in/miniosv.csv \\
+        --linux results/sf100-breakdown-r6in/linux.csv
 
 S3 cost: ~450k GET requests, about \\$0.18.
 """

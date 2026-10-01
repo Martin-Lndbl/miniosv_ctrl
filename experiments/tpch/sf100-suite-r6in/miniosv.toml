@@ -1,7 +1,7 @@
-name = "miniosv-sf100-suite-r6in"
+name = "miniosv"
 title = "DuckDB-on-miniOSv: all 22 TPC-H queries at sf=100 on r6in.8xlarge"
 description = """
-The miniOSv arm of the sf=100 head-to-head, paired with linux-sf100-suite-r6in.
+The miniOSv arm of the sf=100 head-to-head, paired with sf100-suite-r6in/linux.
 Same instance type, same scale factor, same 22 queries, two reps a side, and
 each arm at its own tuned operating point rather than a shared one.
 
@@ -50,7 +50,7 @@ first-byte time from ~42 to ~24 ms.
 rather than the end of the suite. sf=100 has no canned answers, so `match`
 reads unchecked -- correctness rests on the sf=1 suite.
 
-    just plot results/tpch/miniosv-sf100-suite-r6in.csv results/tpch/linux-sf100-suite-r6in.csv \\
+    just plot results/sf100-suite-r6in/miniosv.csv results/sf100-suite-r6in/linux.csv \\
         --series note --box --value-col query_ms --ylabel "Query latency (ms)"
 
 S3 cost: ~450k GET requests a rep, so ~\\$0.36 for this arm's two.

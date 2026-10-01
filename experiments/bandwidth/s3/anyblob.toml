@@ -1,0 +1,75 @@
+name = "anyblob"
+title = "AnyBlob against S3 on a 200 Gbps wire: payload throughput vs provisioned cores"
+description = """
+The AnyBlob arm of the 200G figure (a backup slide, not a paper figure). It
+belongs here more than on the nginx one: AnyBlob is a *cloud object store*
+download manager, and the thing it is built around -- a throughput-based
+resolver that spreads requests over the front-ends S3 answers with -- only has
+anything to do when the peer is S3.
+
+**The anyblob-nginx configuration, endpoint aside.** Same core budget as the
+axis, one daemon per core, 64 requests a core, 32 MiB ranged GETs, 256 blocks
+a worker, plain HTTP, `nogro`, and the MTU left at the ENA default of 9001 so
+jumbo stays in play -- `gro_off` removes receive aggregation and nothing else.
+Two Linux arms shaped by one piece of code, lifted verbatim from
+competitors/wrk-http.
+
+**One deliberate difference: `pin = 0`.** The nginx arm dials a single private
+address, so it is pinned by construction -- there is one server and no name to
+resolve. S3 is not one server, and pinning it through /etc/hosts (which
+anyblob-tls-100g did, for comparability with the unikernel) disables the
+contribution AnyBlob is most known for. Unpinned, the resolver is live, and it
+matches the miniOSv 200G arms, which have resolved per worker since the DNS
+work landed on 2026-09-28.
+
+**The core budget holds without the pin, and that is measured.** The two are
+unrelated mechanisms: `pin` writes /etc/hosts, while the budget comes from
+`ethtool -L combined N` (the NIC has only N queues, so more front-ends spread
+over the same N), IRQ `smp_affinity_list` and `xps_cpus` on cores 0..N-1, and
+`taskset` on the binary, which io_uring's io-wq workers inherit. The instance
+script samples /proc/stat per cpu across the run and prints
+`CPU BUDGET: cores_in=.. cores_out=..`; the first two runs of the earlier,
+GRO-on version read `cores_out=0.00` at both 8 and 16 cores, so nothing ran
+outside the budget.
+
+Read `cores_in` as proof of confinement, not as a core count comparable to the
+binary's `cores_avg`: the sampling spans the whole process, including the
+seconds spent allocating and touching the buffer pool, while `cores_avg` is
+`getrusage` around the transfer alone. Neither sees the other's blind spot --
+`cores_avg` misses io-wq workers and softirq, `cores_in` is diluted by startup.
+
+2 to 32 cores. The arms separate at the low end; by 16 the wire rather than
+any stack is close to the limit, and 32 is there to show the convergence
+rather than to discriminate.
+
+    just plot results/s3/miniosv-http-200g-jumbo-pool.csv \\
+        results/s3/linux-http-200g-capped.csv results/s3/anyblob-http-200g.csv \\
+        --series note --value-col gbps --ylabel "Gbps (payload)"
+
+S3 cost: 256 GETs a worker, ~7.7k requests over the sweep, well under \\$0.01.
+"""
+
+bench    = "competitors/anyblob"
+instance = "r6in.32xlarge"
+axis     = "cpus"
+grid     = { cpus = [2, 4, 8, 16, 32] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+
+value_col = "gbps"
+ylabel    = "Gbps (payload, whole run)"
+unit      = "Gbps"
+series    = "note"
+
+[fixed]
+conns  = 64
+block  = "32M"
+blocks = 256
+scheme = "http"
+mode   = "nogro"
+pin    = 0
+
+[env]
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "AnyBlob"

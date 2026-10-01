@@ -1,8 +1,8 @@
-name = "linux-sf100-suite-r6in"
+name = "linux"
 title = "DuckDB on Linux: all 22 TPC-H queries at sf=100 on r6in.8xlarge"
 description = """
 The Linux arm of the sf=100 head-to-head, paired with
-miniosv-sf100-suite-r6in. Same instance type, same scale factor, same 22
+sf100-suite-r6in/miniosv. Same instance type, same scale factor, same 22
 queries in the same order, two reps a side.
 
 **threads=128**, four threads a vCPU on this 32-vCPU machine. Swept
@@ -38,7 +38,7 @@ single margin here.
 `keep_going` so one failed query is one invalid row. sf=100 has no canned
 answers, so `match` reads unchecked.
 
-    just plot results/tpch/miniosv-sf100-suite-r6in.csv results/tpch/linux-sf100-suite-r6in.csv \\
+    just plot results/sf100-suite-r6in/miniosv.csv results/sf100-suite-r6in/linux.csv \\
         --series note --box --value-col query_ms --ylabel "Query latency (ms)"
 
 S3 cost: ~450k GET requests a rep, so ~\\$0.36 for this arm's two.

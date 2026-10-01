@@ -1,0 +1,42 @@
+name = "miniosv"
+title = "DuckDB-free GETs from S3 on a 200 Gbps wire: the unikernel arm, 2 to 32 cores"
+description = """
+The unikernel arm of the S3 bandwidth figure, paired with s3/linux and
+s3/anyblob. A worker owns a core, so the axis is the core budget.
+
+32 MiB ranged GETs, plain HTTP, 64 connections a worker, 256 blocks a worker
+from a shared pool, unpinned so each worker resolves S3 itself, `nogro` with
+the MTU left at the ENA default of 9001 so jumbo stays in play. The same shape
+as the nginx arm of the same name; only the endpoint differs -- and nginx is
+one private address, pinned by construction, where S3 is many front-ends and
+the resolver is left to do its job.
+
+Superseded miniosv-http-200g-jumbo-pool as the live arm: that one sweeps 8-32
+workers at one rep, which is the wrong range (the arms separate below 8) and
+too thin for an unpinned S3 run, where a 2-worker point drew 34% apart on two
+reps of the AnyBlob arm.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "r6in.32xlarge"
+axis     = "workers"
+grid     = { workers = [2, 4, 8, 16, 32] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 900
+
+value_col = "gbps"
+ylabel    = "Gbps (payload, whole run)"
+unit      = "Gbps"
+series    = "note"
+
+[fixed]
+conns  = 64
+blocks = 256
+block  = "32M"
+
+[env]
+BENCH_SCHEME    = "http"
+BENCH_TLS_STUB  = "0"
+AWS_BUCKET_SIZE = "50G"
+BENCH_NOTE      = "miniOSv"

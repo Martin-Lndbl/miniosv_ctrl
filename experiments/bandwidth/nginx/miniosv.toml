@@ -1,28 +1,22 @@
-name = "miniosv-nginx"
+name = "miniosv"
 title = "miniOSv against a static nginx: throughput against workers, ranges from a shared pool"
 description = """
-The miniOSv half of the nginx head-to-head, paired with wrk-nginx. Our own
-server, so unlike the S3 sweeps there is no front-end lottery: nginx serves
-every worker the same 9014-byte frames, and what the curve shows is the stack.
+The unikernel arm of the bandwidth figure. Payload throughput against the core
+budget, fetching from a static nginx we control on a second r6in.32xlarge in
+the same availability zone, over its private address -- no object store in the
+way, so the client is the only subject.
 
-Shape, and why each number. **conns=64** a worker is what the 200G sweep
-settled on: at 16 the first attempt moved 32 GiB in 2.8 s and ramp-up and drain
-dominated the aggregate. **blocks=256** because the shared pool only acts when
-blocks exceed conns -- at the default 0 every slot dials once, the pool is
-empty after the initial dial and a slow worker still holds the run open. 256
-against 64 gives four refill rounds a slot at every point on the axis.
-**block=32M** keeps 8 GiB a worker, so the run grows with the axis (16 GiB at
-2 workers, 256 GiB at 32) instead of finishing before it reaches steady state.
+32 MiB ranged GETs, plain HTTP, `Connection: close` (one block a connection),
+64 connections a worker, blocks drawn from a shared pool so a slow worker
+fetches fewer rather than holding the run open. A worker owns a core.
 
-Measured 2026-09-30 on c6in.large at this shape: the pool took the spread
-between the first and last worker to finish from 31.4% of the run to 1.7%, and
-throughput from 21.6 to 24.3 Gbps, against a server with no asymmetry at all.
-That is the drain that is the stack's own rather than S3's.
+A `server` type launches an nginx per point, which is what makes
+`just reproduce` work alone. For a sweep use a long-living one instead:
 
-Both ends are r6in.32xlarge: a 50 Gbps server would cap a client that reached
-174 Gbps of frames against S3. Two of them is 256 of the 300 spot vCPUs the
-account allows, so a point will refuse while a previous instance is still
-shutting down -- retry rather than reading it as scarcity.
+    scripts/bench/nginx-server.py start --client r6in.32xlarge
+    BENCH_ZONE=<its zone> just reproduce <this> --target-ip <its ip>
+
+with `server` set to "" so the point does not launch its own.
 """
 
 bench    = "apps/bench/smoltcp-s3"

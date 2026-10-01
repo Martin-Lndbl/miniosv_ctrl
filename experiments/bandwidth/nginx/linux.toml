@@ -1,39 +1,23 @@
-name = "wrk-nginx"
+name = "linux"
 title = "wrk on Linux against a static nginx: the Linux half of the nginx head-to-head"
 description = """
-Paired with miniosv-nginx, same server type, same block size, same axis.
+The `wrk` arm of the bandwidth figure: a conventional HTTP load generator,
+against the same nginx, same wire.
 
-**cpus is the axis, and it is the analogue of the unikernel's workers**: a
-mininet worker owns an RSS queue and a core together, and `cpus=N` is what
-confines wrk and the NIC to N cores (irqbalance off, N channels, IRQs and XPS
-on 0..N-1). Linux is still free to schedule softirq work as it likes, so the
-cores are not bound to queues the way mininet's are -- the budget matches, the
-binding does not.
+Confined to the core budget -- irqbalance off, N channels, IRQs and XPS on
+cores 0..N-1 -- and run `nogro` with the MTU left at 9001, so one IP datagram
+is one wire frame on every arm and none is credited with another's header
+overhead. `conns_per_cpu = 64` scales depth with the axis: a fixed total gave
+wrk 16x the unikernel's depth at 2 cores, deep enough that 14 requests timed
+out and the point was void.
 
-**mode=nogro, not parity.** parity also drops the MTU to 1500, which was the
-honest wire while minidpdk's mbuf data room was a constexpr 1536; it is 9216
-since 2026-09-29 and mininet negotiates 9001, so holding Linux at 1500 would
-now be a handicap rather than a match. nogro is the core budget with receive
-aggregation off and the frame size left alone, which is the only way a
-per-frame cost can be read on either side.
+A `server` type launches an nginx per point, which is what makes
+`just reproduce` work alone. For a sweep use a long-living one instead:
 
-**conns_per_cpu=64 makes the depth track the axis**, as the unikernel's does:
-its conns are per worker, so in flight it carries workers x 64. wrk's `conns`
-is a flat total, and a flat 2048 gave the Linux arm 16x miniOSv's depth at
-cpus=2 and an equal one only at cpus=32 -- not a comparison, a load mismatch,
-and deep enough on 2 cores that 14 requests timed out and the point was
-discarded as invalid. Scaled, both arms carry 128/256/512/1024/2048 at
-2/4/8/16/32. `conns` still stands as a flat total when cpus=0.
+    scripts/bench/nginx-server.py start --client r6in.32xlarge
+    BENCH_ZONE=<its zone> just reproduce <this> --target-ip <its ip>
 
-**threads=32 for the same reason conns is fixed high.** wrk's threads are event
-loops, not a core budget, and the default of 8 would leave 24 of the 32 cores
-idle at the top of the axis while `cpus` says they are available. 32 is
-oversubscribed at the low points -- event loops timeshare, which costs a little
-context switching -- but under-subscribing would cap the arm outright and read
-as Linux scaling badly.
-
-`close=1` keeps `Connection: close` on every request, which is the smoltcp-s3
-arm's shape -- one connection per block, not a reused keep-alive session.
+with `server` set to "" so the point does not launch its own.
 """
 
 bench    = "competitors/wrk-http"
