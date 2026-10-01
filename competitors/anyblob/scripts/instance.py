@@ -240,6 +240,54 @@ def cap_cores(iface, n):
         [ln.split()[-1] for ln in run("ethtool", "-l", iface).splitlines() if "Combined" in ln][-1]))
 
 
+def percpu():
+    """busy and total jiffies per cpu, from /proc/stat's cpuN lines.
+
+    `cores_avg` in the binary is getrusage(RUSAGE_SELF): process threads only.
+    It sees neither io_uring's io-wq kernel workers nor the softirq receive
+    path, both of which are real cost on a budget of N cores -- so it
+    understates, and it cannot show whether anything ran outside the budget at
+    all. This can."""
+    out = {}
+    for line in read("/proc/stat").splitlines():
+        f = line.split()
+        if not f or not f[0].startswith("cpu") or f[0] == "cpu":
+            continue
+        v = [int(x) for x in f[1:]]
+        idle = v[3] + (v[4] if len(v) > 4 else 0)
+        out[int(f[0][3:])] = (sum(v) - idle, sum(v))
+    return out
+
+
+def report_cpu_budget(before, after, n):
+    """How many cores were busy inside the budget, and how many outside it.
+
+    A fraction per cpu (busy jiffies / total jiffies) needs no HZ and sums to
+    cores. `cores_out` is the number that matters: taskset confines the
+    daemons and cap_cores confines the IRQs, but nothing proves it until the
+    kernel's own accounting is read back."""
+    rule("cpu budget")
+    inside = outside = 0.0
+    hot = []
+    for cpu, (b1, t1) in sorted(after.items()):
+        b0, t0 = before.get(cpu, (0, 0))
+        dt = t1 - t0
+        if dt <= 0:
+            continue
+        frac = (b1 - b0) / dt
+        if n and cpu >= n:
+            outside += frac
+            if frac > 0.02:
+                hot.append("cpu{}={:.2f}".format(cpu, frac))
+        else:
+            inside += frac
+    say("budget       : {}".format("0-{}".format(n - 1) if n else "all cpus"))
+    say("cores busy   : {:.2f} inside, {:.2f} outside".format(inside, outside))
+    if hot:
+        say("outside >2%  : " + ", ".join(hot[:12]))
+    say("CPU BUDGET: cores_in={:.2f} cores_out={:.2f} budget={}".format(inside, outside, n))
+
+
 def counters(iface):
     out = {}
     header = {}
@@ -334,8 +382,9 @@ def main():
         if cpus > 0:
             cap_cores(iface, cpus)
         pin()
-        before = counters(iface)
+        before, cpu0 = counters(iface), percpu()
         rc = run_bench(iface)
+        report_cpu_budget(cpu0, percpu(), cpus)
         report_counters(before, counters(iface))
         return rc
     finally:

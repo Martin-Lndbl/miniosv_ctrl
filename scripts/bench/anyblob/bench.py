@@ -100,6 +100,11 @@ class AnyBlob(LinuxS3):
         "tcp_active_opens": (r"^Tcp:ActiveOpens\s+\+(\d+)", int),
         "tcp_retrans": (r"^Tcp:RetransSegs\s+\+(\d+)", int),
         "pinned": (r"^pinned\s+: (\S+)", str),
+        # Read back off /proc/stat, so unlike cores_avg (getrusage, process
+        # threads only) these include io-wq workers and the softirq receive
+        # path. cores_out > 0 means the core budget leaked.
+        "cores_in": (r"^CPU BUDGET: cores_in=([\d.]+)", float),
+        "cores_out": (r"^CPU BUDGET: .*cores_out=([\d.]+)", float),
     }
 
     def __init__(self) -> None:

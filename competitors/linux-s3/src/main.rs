@@ -144,7 +144,14 @@ fn load_config() -> Result<Config, String> {
         // Same cores as the unikernel, but every Linux feature kept: jumbo,
         // GRO, delayed ACK, receive autotuning. Resources matched, not
         // functionality removed.
-        "capped" => Tuning { pin_cores: pin, ..Tuning::none() },
+        // nogro and nogro1500 are capped minus an offload, which is what the
+        // instance script's own summary claims ("capped minus receive
+        // aggregation and nothing else"). They fell through to Tuning::none()
+        // and so lost the core pinning too: cap_cores() still capped the NIC's
+        // queues and IRQs, but the client's worker threads were free to run on
+        // every vCPU of the machine. A 2-worker nogro run was being compared
+        // against arms confined to 2 cores while using up to 128.
+        "capped" | "nogro" | "nogro1500" => Tuning { pin_cores: pin, ..Tuning::none() },
         "parity" => Tuning {
             pin_cores: pin,
             rcvbuf: Some(parse_size(env("RCVBUF"), RX_BUF_BYTES as u64) as usize),
