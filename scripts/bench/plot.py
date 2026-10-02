@@ -416,7 +416,9 @@ def draw(ax, df, c, first, facet, facet_col, series_col, title, value_col, ylabe
     spread = (
         f"{{}} · box is quartiles over {reps} runs, dots are the runs"
         if box
-        else ("{} · mean of " + reps + " runs, whiskers are ±1 sd" if whiskers
+        # The whisker's meaning belongs in the caption, where a reader looking
+        # at the figure in a paper will be; repeating it on the axes is noise.
+        else ("{} · mean of " + reps + " runs" if whiskers
               else "{} · mean of " + reps + " runs, band is min–max")
     )
     fixed = ", ".join(
@@ -453,6 +455,11 @@ def main() -> int:
         "stacks' sweeps overlay in one figure with --series note",
     )
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument(
+        "--scale", type=float, default=1.0,
+        help="divide the value column by this before plotting, e.g. 1000 to "
+             "show milliseconds as seconds; the label is yours to match",
+    )
     ap.add_argument("--dark", action="store_true")
     ap.add_argument(
         "--series", default=None, help="column to split into one line per value"
@@ -522,6 +529,8 @@ def main() -> int:
     df = pd.concat([pd.read_csv(c) for c in csvs], ignore_index=True)
     if df.empty:
         raise SystemExit(f"{csvs[0]} has no rows")
+    if a.scale != 1.0:
+        df[a.value_col] = pd.to_numeric(df[a.value_col], errors="coerce") / a.scale
     mode = "dark" if a.dark else "light"
     out = a.out or a.csv.with_name(f"{a.csv.stem}{'-dark' if a.dark else ''}.png")
     plot(df, out, mode, a.series, a.title, a.value_col, a.ylabel, a.unit,

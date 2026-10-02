@@ -17,7 +17,6 @@ rather than borrowed from the miniOSv arm. Without it the Linux band is one
 striped block, split unknown.
 """
 import argparse
-import textwrap
 from pathlib import Path
 
 import matplotlib
@@ -43,18 +42,11 @@ from matplotlib.patches import Patch, Polygon, Rectangle  # noqa: E402
 # last send, the first byte back, the last byte back; DuckDB's HTTP log gives
 # the request's whole life, and the client's rest is the difference. A Linux
 # run without the shim has only the log, and its band is one striped block.
-PARTS = [("S3 turnaround (request out to response headers in; dial + TLS handshake on a fresh socket)", "#c0504d"),
+PARTS = [("S3 turnaround", "#c0504d"),
          ("body on the wire", "#e8a33d"),
          ("network stack + HTTP client", "#2e7d32"),
-         ("Linux: whole request life (DuckDB HTTP log), split not measured", "stripes"),
-         ("DuckDB, no request outstanding", "#4472c4")]
-METHOD = ("Bars: the median run's clean (uninstrumented) wall time; the number on top is an average request's life. "
-          "Linux's split comes from a second, logged pass and is rescaled onto the clean bar. Coloured bands: "
-          "the span with at least one request outstanding, split by how an average request's life divides. "
-          "miniOSv: each request timed by the worker. Linux: each request's send, first and last byte stamped at "
-          "the socket by an LD_PRELOAD shim in the same pass as DuckDB's HTTP log, which gives the whole life. "
-          "A Linux receive is stamped when the syscall returns, so its turnaround and body include the kernel's "
-          "receive path and the thread's wake-up; the miniOSv worker stamps the frame as it arrives.")
+         ("request life, split not measured", "stripes"),
+         ("DuckDB, nothing outstanding", "#4472c4")]
 
 
 def median_run(g: pd.DataFrame, wall: str) -> pd.Series:
@@ -143,6 +135,11 @@ def main() -> int:
             bars.append((i * 3 + 1, f"Q{q:02d}\nLinux", lparts, lnote))
         print(line)
 
+    # The arms report milliseconds; a query is seconds, so the axis is seconds.
+    # The per-bar note stays in ms because a *request* is tens of ms, and 0.036
+    # would read worse than 36.
+    bars = [(x, label, [v / 1000 for v in parts], note) for x, label, parts, note in bars]
+
     fig, ax = plt.subplots(figsize=(1.1 * len(bars) + 3, 4.8))
     xs = [b[0] for b in bars]
     bottom = [0.0] * len(bars)
@@ -176,17 +173,18 @@ def main() -> int:
             ax.add_patch(poly)
             poly.set_clip_path(clip)  # after add_patch, which resets the clip to the axes
             i += 1
-    for (x, _, _, note), top in zip(bars, bottom):
-        ax.text(x, top, note, ha="center", va="bottom", fontsize=7)
     ax.set_ylim(0, ymax)
     ax.set_xticks(xs, [b[1] for b in bars], fontsize=8)
-    ax.set_ylabel("Query wall time (ms)")
-    ax.set_title(a.title or f"{a.csv.stem}: where the wall time goes (median run)", fontsize=10)
+    ax.set_ylabel("Query latency (s)")
+    # An empty --title suppresses it, as plot.py does: in a paper the caption
+    # carries the title and the method, and repeating either on the axes is noise.
+    if a.title is None:
+        ax.set_title(f"{a.csv.stem}: where the wall time goes (median run)", fontsize=10)
+    elif a.title:
+        ax.set_title(a.title, fontsize=10)
     ax.grid(axis="y", alpha=0.3)
     width_in = fig.get_size_inches()[0]
-    note = textwrap.fill(METHOD, int(width_in * 13))
-    note_h = 0.022 * (note.count("\n") + 1)  # figure fraction per 7 pt line, roughly
-    fig.text(0.5, 0.005, note, ha="center", va="bottom", fontsize=7, color="#555555")
+    note_h = 0.0
     ncol = 5 if width_in >= 18 else 3 if width_in >= 11 else 1
     shown = len(handles)
     rows = -(-shown // ncol)
