@@ -91,7 +91,7 @@ def latency_ms(s):
 
 
 def main():
-    iface = default_route()
+    iface, _ = default_route()
     rc = 1
     try:
         say("=== linux-http ===")
@@ -125,14 +125,16 @@ def main():
         if CPUS:
             cmd = ["taskset", "-c", "0-{}".format(CPUS - 1)] + cmd
         say("cmd          : " + " ".join(cmd))
-        n0, c0, t0 = nic(iface), cpu(), time.time()
+        n0, c0, t0, pc0 = nic(iface), cpu(), time.time(), percpu()
         try:
             p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=int(DURATION) + 180)
         except subprocess.TimeoutExpired:
             say("INCOMPLETE: wrk did not finish")
+            report_cpu_budget(pc0, percpu(), CPUS)
             return 1
         elapsed = time.time() - t0
         n1, c1 = nic(iface), cpu()
+        report_cpu_budget(pc0, percpu(), CPUS)
         for line in (p.stdout + p.stderr).splitlines():
             say(line)
 

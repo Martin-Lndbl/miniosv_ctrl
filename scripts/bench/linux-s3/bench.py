@@ -66,6 +66,11 @@ class LinuxS3(Bench):
     # Shared lines live in runner.COMMON_METRICS; this stack does not steer by
     # RSS and nothing clamps its worker count, so requested == actual.
     metrics = COMMON_METRICS | {
+        # From /proc/stat across the run, so unlike a client's own getrusage
+        # these include every thread plus the softirq receive path.
+        # cores_out > 0 means the core budget leaked.
+        "cores_in": (r"^CPU BUDGET: cores_in=([\d.]+)", float),
+        "cores_out": (r"^CPU BUDGET: .*cores_out=([\d.]+)", float),
         "workers_actual": (r"^bench: (\d+) workers", int),
     }
 

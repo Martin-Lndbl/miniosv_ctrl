@@ -29,6 +29,7 @@ RCVBUF = int(cfg("RCVBUF", str(4 * 1024 * 1024)))
 # The unikernel pins one worker per RSS queue and the device gives it 8, so the
 # parity arm gets that core budget rather than the machine's 32 (docs §7).
 NQ = int(cfg("BENCH_WORKERS", "8") or 8)
+CAPPED = cfg("MODE", "stock") in ("capped", "parity", "nogro", "nogro1500")
 
 # Allowlist: the full delta was ~60 lines of per-queue byte counts saying
 # nothing the aggregate does not. These change how a run is *read*.
@@ -311,7 +312,14 @@ def run_bench():
         import socket
         env["AWS_TARGET_IP"] = socket.gethostbyname("{}.s3.{}.amazonaws.com".format(BUCKET, REGION))
         say("resolved     : " + env["AWS_TARGET_IP"])
-    p = subprocess.Popen([BIN], stdout=subprocess.PIPE,
+    # pin_to() in the binary confines worker threads only, so anything else
+    # the process runs was free across the whole machine while the arm was
+    # labelled with a core budget. taskset covers every thread; the per-worker
+    # affinity then narrows each one inside that mask.
+    argv = ["taskset", "-c", "0-{}".format(NQ - 1), BIN] if CAPPED else [BIN]
+    if CAPPED:
+        say("taskset      : 0-{}".format(NQ - 1))
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, text=True, env=env)
     assert p.stdout is not None
     for line in p.stdout:
@@ -369,11 +377,13 @@ def main():
 
         if not fetch_binary():
             return 1
+        cpu0 = percpu()
 
         before = counters(iface)
         cpu_before = cpu_times()
         t0 = time.monotonic()
         rc = run_bench()
+        report_cpu_budget(cpu0, percpu(), NQ if CAPPED else 0)
         elapsed = time.monotonic() - t0
         report_cpu(cpu_before, cpu_times(), elapsed)
         report_counters(before, counters(iface))

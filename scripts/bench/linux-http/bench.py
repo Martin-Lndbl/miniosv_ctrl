@@ -63,6 +63,11 @@ class WrkHttp(LinuxS3):
     default_instance = "c6in.8xlarge"
     max_vm_seconds = 600
     metrics = {
+        # From /proc/stat across the run, so unlike a client's own getrusage
+        # these include every thread plus the softirq receive path.
+        # cores_out > 0 means the core budget leaked.
+        "cores_in": (r"^CPU BUDGET: cores_in=([\d.]+)", float),
+        "cores_out": (r"^CPU BUDGET: .*cores_out=([\d.]+)", float),
         "gbps": (r"^AGGREGATE: \d+ requests, ([\d.]+) Gbps", float),
         "requests": (r"^AGGREGATE: (\d+) requests", int),
         "rps": (r"^Requests/sec:\s+([\d.]+)", float),
