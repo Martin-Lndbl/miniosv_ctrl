@@ -1,0 +1,47 @@
+name = "miniosv"
+title = "DuckDB-on-miniOSv overhead breakdown, Q18+Q21 only: re-check after the Linux cache fix"
+description = """
+Same config as sf100-breakdown-r6in-pinned/miniosv (workers=4 conns=128
+threads=256 tls=0, pinned to 3.5.217.108), restricted to Q18 and Q21.
+
+Q21 was the query whose Linux request count turned out to be roughly half
+miniOSv's (18343 vs 42778) because Linux's DuckDB ran with
+enable_external_file_cache at its default of true, letting its multiple
+scans of lineitem (for the correlated NOT EXISTS) hit cache instead of the
+network -- miniOSv has no such cache. Q18 wasn't one of the six breakdown
+queries originally picked, but it shares Q21's shape (lineitem touched twice:
+once in the quantity-sum subquery, once in the final join) and was also a
+Linux win in the matched-HTTP suite, so it gets the same check now that the
+Linux driver sets enable_external_file_cache=false to match.
+
+This arm is unaffected by the fix (its cache was already off); it reruns
+only so both sides of the pair come from the same pinned window.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 1200
+keep_going = true
+target_ip = "3.5.217.108"
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+bar       = true
+
+[[points]]
+query = "18 21"
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 128
+threads = 256
+tls     = 0
+
+[env]
+BENCH_NOTE = "miniOSv"

@@ -1,0 +1,41 @@
+name = "linux"
+title = "DuckDB on Linux overhead breakdown, Q18+Q21 only: with enable_external_file_cache=false"
+description = """
+Same config as sf100-breakdown-r6in-pinned/linux (threads=256 gro=off
+scheme=http pin=3.5.217.108 httplog=1 netphase=1), restricted to Q18 and
+Q21, now that the driver sets `SET enable_external_file_cache=false` before
+every query (it previously ran with DuckDB's default of true).
+
+Q21's old request count (18343) was roughly half miniOSv's (42778): its
+multiple scans of lineitem for the correlated NOT EXISTS subquery could hit
+this arm's (default-on) cache instead of the network, which miniOSv -- cache
+off from the start -- could not do. Q18 shares that shape (lineitem read
+twice) and was also a Linux win in the matched-HTTP suite; checking it here
+since it wasn't one of the six queries the original breakdown covered.
+
+Runs concurrently with the miniOSv arm so the S3 turnaround segment stays
+comparable.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 1200
+keep_going = true
+
+[[points]]
+query = "18 21"
+
+[fixed]
+sf       = "100"
+gro      = "off"
+threads  = 256
+scheme   = "http"
+pin      = "3.5.217.108"
+httplog  = "1"
+netphase = "1"
+
+[env]
+BENCH_NOTE = "Linux"
