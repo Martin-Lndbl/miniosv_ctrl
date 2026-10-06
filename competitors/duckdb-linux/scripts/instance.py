@@ -50,6 +50,17 @@ CPU_PROBE = cfg("BENCH_CPU_PROBE") == "1"
 # S3, and both stacks are entitled to it.
 THREADS = cfg("BENCH_THREADS")
 
+# The miniOSv arm turns this off (apps/miniduckdb's miniosv/main.cc) because
+# several queries share one connection there and a later query must not be
+# served out of RAM instead of S3. This arm starts a fresh DuckDB process per
+# query, so there is no *cross*-query risk -- but the cache is still live for
+# the duration of one query's own execution, and a query that scans a table
+# more than once (Q21's correlated NOT EXISTS over lineitem) can serve its own
+# repeat reads from it. That is a real DuckDB feature, but it is not a
+# property of the client/network stack this comparison is about, and it is
+# off on the other arm, so it is off here too.
+NO_CACHE = "SET enable_external_file_cache=false; "
+
 # One expensive predicate per lineitem row, for the par_t1/par_tall pair whose
 # ratio is the parallel speedup actually delivered. It has to be a table scan:
 # range() parallelises to about 1.5 threads on either stack, so the range_scan
@@ -350,13 +361,14 @@ def http_profile(qn):
     # every SET between the two is itself a log record.
     prelude = (
         "{ext} "
+        "{nocache}"
         "{threads}"
         "SET logging_storage='memory'; "
         "SET logging_level='debug'; "
         "SET logging_mode='ENABLE_SELECTED'; "
         "SET enabled_log_types='HTTP'; "
         "SET enable_logging=true; "
-    ).format(ext=LOAD_HTTPFS, threads=thread_setting())
+    ).format(ext=LOAD_HTTPFS, nocache=NO_CACHE, threads=thread_setting())
     sql = prelude + "PRAGMA tpch({});".format(qn) + HTTP_STATS_SQL.format(out=out)
     np_out = os.path.join(WORK, "netphase-q{}.txt".format(qn))
     if os.path.exists(np_out):
@@ -546,8 +558,8 @@ def main():
         for qn in QUERIES:
             t0 = time.perf_counter()
             try:
-                out = run_sql("{} {}PRAGMA tpch({});".format(
-                    LOAD_HTTPFS, thread_setting(), qn))
+                out = run_sql("{} {}{}PRAGMA tpch({});".format(
+                    LOAD_HTTPFS, NO_CACHE, thread_setting(), qn))
                 rows = json.loads(out) if out.strip() else []
             except Exception as e:
                 say("Q{:02d}: FAIL 0.0 ms: {}".format(qn, e))
