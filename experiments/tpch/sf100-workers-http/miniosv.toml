@@ -1,0 +1,56 @@
+name = "miniosv"
+title = "Does workers=2 beat workers=4 under HTTP at threads=256?"
+description = """
+A pre-check before committing to workers=4 in the matched-threads suite.
+threads=256 was chosen for CPU reasons (it was each arm's own best under the
+thread sweep); it says nothing about how many of those threads should be
+network pollers versus DuckDB workers. workers=4 is carried over from the
+HTTPS suite, never re-checked under HTTP/threads=256.
+
+Six points, one rep each, Q09+Q13 (the same request-dense/body-heavy proxy
+pair as sf100-threads-http): workers=2 across four connection counts (64 to
+512, since depth = workers x conns capped by threads=256, so conns=256 is
+where w=2 first matches w=4's capped-depth regime), plus two same-session
+workers=4 points as a baseline. Budget: 6 runs, no more.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "r6in.8xlarge"
+axis     = "workers"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 1800
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+
+[[points]]
+workers = 2
+conns   = 64
+[[points]]
+workers = 2
+conns   = 128
+[[points]]
+workers = 2
+conns   = 256
+[[points]]
+workers = 2
+conns   = 512
+[[points]]
+workers = 4
+conns   = 128
+[[points]]
+workers = 4
+conns   = 256
+
+[fixed]
+sf      = "100"
+threads = 256
+tls     = 0
+query   = "9 13"
+
+[env]
+BENCH_NOTE = "miniOSv w{workers}c{conns}"

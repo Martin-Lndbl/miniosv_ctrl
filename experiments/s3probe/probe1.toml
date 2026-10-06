@@ -1,0 +1,31 @@
+name = "probe1"
+title = "Quick check: is 3.5.217.108 still a good S3 front-end"
+description = """
+Corrected from a first attempt that set blocks < conns (most connections got
+0-1 block, dial overhead dominated, read 3 Gbps on an endpoint whose frame
+size was still 6374 B/jumbo). blocks=32 against conns=4 gives each connection
+real steady-state work, 2 GiB total, matching the scale of the original
+frame-size A/B that measured ~20 Gbps on this instance/worker count.
+
+Second correction: conns=16 now (was 4), matching the original A/B's depth
+exactly -- the first corrected attempt (5.2 Gbps) changed depth AND block
+count at once, confounding "endpoint degraded" with "too shallow to
+saturate." blocks=64 keeps the same 4x blocks:conns ratio at this depth.
+"""
+
+bench    = "apps/bench/smoltcp-s3"
+instance = "c6in.large"
+axis     = "conns"
+grid     = { conns = [16] }
+reps     = 1
+cooldown = 0
+max_vm_seconds = 600
+target_ip = "3.5.217.108"
+
+[fixed]
+workers = 2
+block   = "32M"
+blocks  = 64
+
+[env]
+BENCH_NOTE = "probe-3.5.217.108"

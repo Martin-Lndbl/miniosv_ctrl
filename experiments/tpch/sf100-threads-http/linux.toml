@@ -1,0 +1,48 @@
+name = "linux"
+title = "One thread count for both arms: the kernel side, plain HTTP"
+description = """
+The suite runs each arm at its own tuned thread count -- miniOSv 256, Linux 128
+-- which is defensible but makes the two configurations differ in more than the
+stack. This sweep looks for a single number both can take.
+
+Two queries, chosen to span the shapes rather than to be representative: Q09 is
+request-dense (24k requests, 180 in flight) and Q13 is body-heavy and light on
+requests (2.5k, 39 in flight). Tuning on heavy queries alone is the mistake the
+Linux arm already made once -- 128 won a five-query sweep that skewed heavy and
+was then wrong for most of its own subset.
+
+Plain HTTP (`tls = 0`), so the thread count is priced without crypto in the
+way. **This is also the sweep's main caveat**: the suite is HTTPS, TLS adds
+per-byte CPU, and more threads contend for that CPU -- so an optimum found here
+may sit higher than the one that holds under TLS. Confirm the winner on the
+real workload before adopting it.
+
+`gro = off` as the suite, so both arms count one frame per datagram.
+There is no `conns` knob here: httpfs opens a connection per thread, so the
+thread count is simultaneously the depth and the oversubscription -- which is
+exactly why a shared number is not the same thing for the two arms.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "threads"
+grid     = { threads = [64, 128, 256, 512] }
+reps     = 2
+cooldown = 0
+max_vm_seconds = 1800
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+
+[fixed]
+sf      = "100"
+gro     = "off"
+
+scheme  = "http"
+query   = "9 13"
+
+[env]
+BENCH_NOTE = "Linux"
