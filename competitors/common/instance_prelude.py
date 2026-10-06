@@ -37,7 +37,8 @@ WORK = cfg("BENCH_WORK", "/run")
 RUN_ID = cfg("RUN_ID", "unknown")
 BUCKET, REGION = cfg("AWS_BUCKET"), cfg("AWS_REGION")
 HOST = "{}.s3.{}.amazonaws.com".format(BUCKET, REGION)
-ENDPOINT = "https://" + HOST
+SCHEME = cfg("BENCH_SCHEME", "https") or "https"
+ENDPOINT = "{}://{}".format(SCHEME, HOST)
 
 _console = None
 if not LOCAL:

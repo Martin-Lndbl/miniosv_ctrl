@@ -13,8 +13,6 @@ body, and what the client adds.
 import json
 
 
-SCHEME = cfg("BENCH_SCHEME", "https") or "https"
-
 # An S3 front-end to pin the bucket to, when the other arm is pinned too;
 # empty resolves normally, which is the default on both.
 PIN_IP = cfg("BENCH_PIN_IP")
