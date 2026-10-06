@@ -17,6 +17,25 @@ Same pinned address as every other pinned experiment this session -- see
 sf100-suite-http-r6in-pinned/miniosv for why 3.5.217.108 and why pinning an
 address the guest itself resolved from the real S3 hostname keeps this inside
 the VPC gateway endpoint's free route. Confirmed per-run by cost.py.
+
+The first attempt (no explicit memlimit) crashed partway through Q20: DuckDB's
+default memory_limit (~80% of detected RAM) left too little headroom for the
+mininet/TLS layer's own memory use, and once combined demand exceeded
+physical RAM, DuckDB's own graceful-OOM-reporting path couldn't allocate
+enough to report it, crashing the whole boot (std::bad_alloc, confirmed via a
+symbolized backtrace landing in Executor::PushError's own allocation). A
+smaller-instance repro confirmed: capping memlimit well below the auto
+default converts this into graceful behavior (the one query that did exceed
+the cap failed cleanly with an IO error instead of taking the process down --
+disk spill isn't available on this unikernel's filesystem, so that failure
+mode is still possible, just no longer catastrophic). memlimit=100GB here
+is a deliberate, generous cut of the 256 GiB this instance has -- about 156
+GiB of headroom, well above the auto default's ~51 GiB -- high enough that no
+single TPC-H query at sf=100 should need to spill, while leaving real room
+for the TLS connection churn. reps=1 for this first attempt at the real
+depth/instance combination; confirmed clean (22/22, memory stayed in the
+230-240 GiB free range throughout) -- reps bumped to 2 to match the rest of
+the suite.
 """
 
 bench    = "apps/bench/duckdb-tpch"
@@ -38,11 +57,12 @@ box       = true
 query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
 
 [fixed]
-sf      = "100"
-workers = 4
-conns   = 128
-threads = 256
-tls     = 1
+sf       = "100"
+workers  = 4
+conns    = 128
+threads  = 256
+tls      = 1
+memlimit = "100GB"
 
 [env]
 BENCH_NOTE = "miniOSv pinned (TLS)"

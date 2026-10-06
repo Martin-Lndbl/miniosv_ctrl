@@ -1,0 +1,46 @@
+name = "miniosv-singlecore"
+title = "Debug: clean (non-interleaved) panic text for the TLS allocation crash"
+description = """
+sf100-tls-hang-debug/miniosv (c6in.2xlarge, workers=2 conns=32 threads=64,
+tls=1) crashed after Q08 with a Rust allocation panic (`mininet: PANIC:
+memory allocation of <N> bytes failed`, std::bad_alloc, libc++abi terminate)
+instead of hanging silently -- the original r6in.8xlarge/workers=4 run most
+likely hit the same crash near Q20 and the console simply never got (or never
+printed) the panic text before teardown. Two workers panicking on two cores
+at once wrote to the shared serial console concurrently and interleaved
+character by character, so the exact byte count and backtrace addresses
+aren't reliably readable from that run.
+
+This repro drops to workers=1 so there is only one core that could ever
+panic, for a clean readable panic message, keeping everything else the same
+(tls=1, same pin, same instance size). Queries 1-10 only: the crash happened
+after Q08 last time.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.2xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+target_ip = "3.5.217.108"
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10"
+
+[fixed]
+sf      = "100"
+workers = 1
+conns   = 16
+threads = 16
+tls     = 1
+
+[env]
+BENCH_NOTE = "miniOSv TLS debug singlecore"

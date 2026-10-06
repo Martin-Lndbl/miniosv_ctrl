@@ -1,0 +1,47 @@
+name = "miniosv"
+title = "Debug: does the TLS hang at Q20 reproduce on a smaller instance?"
+description = """
+sf100-suite-https-r6in-pinned/miniosv hung after Q19 completed cleanly and
+before Q20 printed anything at all (2026-10-06, r6in.8xlarge, workers=4
+conns=128 threads=256, tls=1, pinned to 3.5.217.108) -- 25+ minutes with zero
+further console output, stopped at the 40-minute cap.
+
+This is a cheap repro on a much smaller instance (c6in.2xlarge, 8 vCPU vs 32)
+with proportionally scaled depth (workers=2 conns=32 threads=64, vs the
+original workers=4 conns=128 threads=256 -- same ratios), restricted to the
+first 20 queries so it stops right where the original hung, instead of
+burning spend on 21-22 if it reproduces. Tests two things at once: does the
+hang reproduce at all (vs. being a one-off spot/instance flake), and if it
+does, whether it still happens at the same QUERY or is instead tied to scale
+(core count, connection count) -- a small instance hanging at the same query
+number would point at the query's own shape; one that doesn't hang at all, or
+hangs at a different point, would point at something scale-dependent instead.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.2xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+target_ip = "3.5.217.108"
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20"
+
+[fixed]
+sf      = "100"
+workers = 2
+conns   = 32
+threads = 64
+tls     = 1
+
+[env]
+BENCH_NOTE = "miniOSv TLS debug"

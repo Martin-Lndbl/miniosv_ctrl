@@ -1,0 +1,52 @@
+name = "miniosv-lowmem"
+title = "Debug: does capping memory_limit well below RAM avoid the TLS crash?"
+description = """
+sf100-tls-hang-debug/miniosv-singlecore crashed after Q08 with a symbolized
+backtrace landing in duckdb::Executor::PushError -> vector::emplace_back ->
+operator new, which itself threw std::bad_alloc -- not a leak in the mininet
+Rust/TLS layer, but DuckDB's own error-reporting path failing to allocate
+while already handling some earlier error, almost certainly triggered by
+memory pressure. memlimit was never set in any TLS experiment so DuckDB used
+its own default (~80% of detected RAM, observed as `memory: limit=12.5 GiB`
+on this instance's ~16 GiB) -- leaving only ~20% headroom for the mininet/TLS
+layer, the kernel, and everything else outside DuckDB's own accounting. If
+TLS needs more of that headroom than HTTP (more in-flight connection state:
+certificates, session buffers), the two could be colliding.
+
+Same repro as miniosv-singlecore (workers=1 conns=16 threads=16, tls=1, same
+pin, queries 1-10, the crash happened after Q08 last time) but with
+memlimit=8GB explicit -- roughly half the instance's RAM, well under
+DuckDB's own 12.5 GiB default -- to see if real headroom alone prevents the
+crash. Also picks up the new per-query `MEM STATS: free=X GiB` print (added
+to apps/miniduckdb/miniosv/main.cc, not yet run) so the actual free-memory
+trend is visible this time, pass or fail.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "c6in.2xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 900
+keep_going = true
+target_ip = "3.5.217.108"
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10"
+
+[fixed]
+sf       = "100"
+workers  = 1
+conns    = 16
+threads  = 16
+tls      = 1
+memlimit = "8GB"
+
+[env]
+BENCH_NOTE = "miniOSv TLS debug lowmem"
