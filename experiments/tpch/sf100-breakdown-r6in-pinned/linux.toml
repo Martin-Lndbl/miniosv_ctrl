@@ -1,0 +1,37 @@
+name = "linux"
+title = "DuckDB on Linux overhead breakdown: HTTP, matched threads=256, pinned"
+description = """
+Replaces sf100-breakdown-r6in/linux: `threads=256` (was 128), `scheme=http`
+(was HTTPS), `pin=3.5.217.108` (was unpinned). `httplog=1`/`netphase=1` as
+before -- logged pass gives each request's whole life, the LD_PRELOAD shim
+splits it the same three ways mininet reports. Runs concurrently with the
+miniOSv arm so the S3 turnaround segment is comparable.
+
+The two defects the original breakdown caveated -- instrumentation overhead
+leaking into the stack band, and the bogus `np_hs_ms_avg` handshake inflating
+it further -- still apply; nothing about pinning or the thread/scheme change
+fixes either, so the same corrections apply on read.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 3600
+keep_going = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf       = "100"
+gro      = "off"
+threads  = 256
+scheme   = "http"
+pin      = "3.5.217.108"
+httplog  = "1"
+netphase = "1"
+
+[env]
+BENCH_NOTE = "Linux"

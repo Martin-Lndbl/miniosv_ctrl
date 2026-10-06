@@ -1,0 +1,30 @@
+name = "miniosv-q18"
+title = "Replacement run: miniOSv Q18, HTTP, matched threads, pinned"
+description = """
+rep=1's Q18 in sf100-suite-http-r6in-pinned/miniosv was an outlier (6547.2 ms,
+above the entire 6-rep unpinned history for this query: 5017-5809 ms). Removed
+and replaced with this single-query rerun, same config and same pinned
+front-end (3.5.217.108) as the suite it patches.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 600
+keep_going = true
+target_ip = "3.5.217.108"
+
+[[points]]
+query = "18"
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 128
+threads = 256
+tls     = 0
+
+[env]
+BENCH_NOTE = "miniOSv pinned"

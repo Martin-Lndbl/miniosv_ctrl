@@ -1,0 +1,43 @@
+name = "linux"
+title = "DuckDB on Linux, HTTP, matched threads=256, pinned to a good S3 front-end"
+description = """
+Same as sf100-suite-http-r6in/linux (threads=256 gro=off scheme=http) except
+`pin` is set to 3.5.217.108 instead of resolving normally.
+
+See sf100-suite-http-r6in-pinned/miniosv for why this address and why pinning
+at all: 6 unpinned reps showed 16.6% spread, and the miniOSv arm's spread did
+not correlate cleanly with resolved front-end range, so this checks whether
+fixing the endpoint removes that source of noise for both arms at once.
+
+No per-worker DNS exists on this arm to begin with (one process, one
+resolution), so pinning here mainly controls for day-to-day/front-end drift
+between this run and the unpinned baseline, and keeps both arms facing the
+literal same server for a fair comparison.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf      = "100"
+gro     = "off"
+threads = 256
+scheme  = "http"
+pin     = "3.5.217.108"
+
+[env]
+BENCH_NOTE = "Linux pinned"

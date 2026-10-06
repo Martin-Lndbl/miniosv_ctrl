@@ -1,0 +1,44 @@
+name = "linux"
+title = "DuckDB on Linux, HTTPS, matched threads=256, pinned to a good S3 front-end"
+description = """
+Same as sf100-suite-http-r6in-pinned/linux (threads=256 gro=off, same pin
+3.5.217.108) except `scheme=https`.
+
+Exists to isolate the TLS effect cleanly. The prelude refactor that unified
+`ENDPOINT` across benches hardcoded it to "https://", so every earlier
+"scheme=http" run on this arm was secretly already HTTPS -- this is that same
+behaviour, now named correctly instead of landed on by a bug. The point is to
+pair it with sf100-suite-https-r6in-pinned/miniosv for a both-TLS pinned
+number to set beside the both-HTTP pinned one (1.20x total speedup): same
+pin, same threads, only TLS differs between the two suites.
+
+See sf100-suite-http-r6in-pinned/linux for the pin rationale and why it costs
+nothing extra. Confirmed per-run by cost.py.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf      = "100"
+gro     = "off"
+threads = 256
+scheme  = "https"
+pin     = "3.5.217.108"
+
+[env]
+BENCH_NOTE = "Linux pinned (TLS)"

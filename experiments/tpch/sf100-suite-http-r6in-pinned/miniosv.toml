@@ -1,0 +1,54 @@
+name = "miniosv"
+title = "DuckDB-on-miniOSv, HTTP, matched threads=256, pinned to a good S3 front-end"
+description = """
+Same as sf100-suite-http-r6in/miniosv (workers=4 conns=128 threads=256 tls=0)
+except `target_ip` is pinned to 3.5.217.108 instead of resolving per worker.
+
+Unpinned, the suite showed 24.7% rep-to-rep spread (6 reps: 71739-89476 ms)
+that did not correlate cleanly with which front-end each boot happened to
+resolve -- the slowest rep drew two addresses from the same /22 the fastest
+rep also used. Pinning removes the per-worker/per-boot front-end draw as a
+variable entirely, which should collapse at least that source of noise,
+whatever it turns out to have been.
+
+3.5.217.108 chosen because it is the one front-end with a direct, non-inferred
+performance measurement behind it: validated jumbo-capable in the original
+frame-size A/B, and reconfirmed today (2026-10-06) at matched depth --
+WIRE STEADY 18.2 Gbps, 7388 B/frame avg, 0 errors, 2 workers on c6in.large.
+
+Pinning an address the guest itself has legitimately resolved from the real
+S3 hostname keeps it inside the VPC gateway endpoint's prefix-list route, so
+this costs the same $0/GB in-region transfer as every unpinned run this
+session -- confirmed per-run by cost.py, not assumed.
+
+Two reps: enough to see whether pinning collapses the spread, not a full
+variance study on its own.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 2
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+target_ip = "3.5.217.108"
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 128
+threads = 256
+tls     = 0
+
+[env]
+BENCH_NOTE = "miniOSv pinned"

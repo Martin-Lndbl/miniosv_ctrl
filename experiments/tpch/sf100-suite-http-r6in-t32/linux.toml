@@ -1,0 +1,43 @@
+name = "linux"
+title = "Linux at threads=32 (no oversubscription), HTTP, all 22 queries"
+description = """
+One rep, to check whether sf100-suite-http-r6in/linux's threads=256 genuinely
+helps or whether an unoversubscribed thread count (32 = this instance's vCPU
+count) does just as well under HTTP. The matched-threads suite picked 256
+because it won a 2-query HTTP sweep over {64,128,256,512} -- 32 was never in
+that grid, so this is the point that was missing before calling 256 a real
+win rather than an artifact of oversubscription alone.
+
+Same shape as sf100-suite-http-r6in/linux otherwise: `gro=off`,
+`scheme=http`, sf=100, all 22 queries, r6in.8xlarge.
+
+One rep only -- this is a direct-vs-threads=256 sanity check, not a new
+variance study. If it comes out close to or ahead of the 256-thread mean,
+that is reason enough to run it properly before trusting 256 as the answer.
+"""
+
+bench    = "competitors/duckdb-linux"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 1
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22"
+
+[fixed]
+sf      = "100"
+gro     = "off"
+threads = 32
+scheme  = "http"
+
+[env]
+BENCH_NOTE = "Linux t32"
