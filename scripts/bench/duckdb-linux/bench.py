@@ -341,7 +341,30 @@ class DuckdbLinux(Bench):
         # prints its own `Qnn:` line and its own stats. Cut the log at those
         # lines so every query gets a row of its own; the trailing summary
         # falls after the last block and stays out of it.
-        heads = list(re.finditer(r"^Q(\d+): ", text, re.M))
+        #
+        # The serial console sometimes echoes one line twice verbatim --
+        # occasionally with an unrelated getty login banner spliced between
+        # the copies -- and finditer sees the echo's "Qnn: " as a second
+        # query boundary. A character-distance threshold cannot tell that
+        # apart from a real neighbour: a plain suite run prints nothing per
+        # query but that one line, so two genuinely different queries can
+        # sit exactly as close together as an echo does (2026-10-06, sf100
+        # suite: every query's gap was ~41 chars, echo or not). What is
+        # unambiguous is the line's own text: an echo repeats the previous
+        # head's line byte for byte (same ms, same row count); two different
+        # queries never do by chance, and a genuine repeated query ("1 1" in
+        # BENCH_QUERIES) reruns it, so its line differs even though the
+        # number matches.
+        def head_line(h):
+            end = text.find("\n", h.start())
+            return text[h.start():end if end != -1 else len(text)]
+
+        raw_heads = list(re.finditer(r"^Q(\d+): ", text, re.M))
+        heads = []
+        for h in raw_heads:
+            if heads and head_line(h) == head_line(heads[-1]):
+                continue
+            heads.append(h)
         if len(heads) <= 1:
             return finish(parse(text, self.metrics))
         # The NIC tune prints once, before the first query, so it lands in no
