@@ -1,0 +1,41 @@
+name = "miniosv"
+title = "DuckDB-on-miniOSv, Q18+Q21 only: extra reps to tighten the suite's two narrowest margins"
+description = """
+Same config as sf100-suite-http-r6in-pinned/miniosv (workers=4 conns=128
+threads=256 tls=0, pinned to 3.5.217.108), restricted to Q18 and Q21.
+
+Both are now the suite's narrowest miniOSv margins (1.03x each, after the
+Linux cache-off fix put them back to real wins) and the noisiest of the 22
+at 2 reps: Q18 6.3% CV (5221.9/5925.1 ms), Q21 3.3% CV (7787.2/8311.6 ms),
+against well under 1% on most other queries. Six more reps each, appended to
+the existing two rather than replacing them, to see whether the margin holds
+up at n=8 or was partly the 2-rep sample.
+"""
+
+bench    = "apps/bench/duckdb-tpch"
+instance = "r6in.8xlarge"
+axis     = "query"
+reps     = 6
+cooldown = 0
+max_vm_seconds = 2400
+keep_going = true
+target_ip = "3.5.217.108"
+
+value_col = "query_ms"
+ylabel    = "Query latency (ms)"
+unit      = "ms"
+series    = "note"
+box       = true
+
+[[points]]
+query = "18 21"
+
+[fixed]
+sf      = "100"
+workers = 4
+conns   = 128
+threads = 256
+tls     = 0
+
+[env]
+BENCH_NOTE = "miniOSv pinned"
