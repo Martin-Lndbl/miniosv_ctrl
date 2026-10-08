@@ -32,8 +32,8 @@ reps     = 2
 cooldown = 0
 max_vm_seconds = 900
 
-value_col = "gbps"
-ylabel    = "Gbps (payload, whole run)"
+value_col = "gbps_wire_steady"
+ylabel    = "Gbps (frames, every slot busy)"
 unit      = "Gbps"
 series    = "note"
 
@@ -48,3 +48,4 @@ pin    = 0
 [env]
 AWS_BUCKET_SIZE = "50G"
 BENCH_NOTE      = "AnyBlob"
+BENCH_ZONE      = "eu-north-1b"

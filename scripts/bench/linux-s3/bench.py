@@ -72,11 +72,18 @@ class LinuxS3(Bench):
         "cores_in": (r"^CPU BUDGET: cores_in=([\d.]+)", float),
         "cores_out": (r"^CPU BUDGET: .*cores_out=([\d.]+)", float),
         "workers_actual": (r"^bench: (\d+) workers", int),
+        # The NIC's counter: the three lines every arm prints.
+        "gbps_wire": (r"^WIRE: ([\d.]+) Gbps", float),
+        "gbps_wire_steady": (r"^WIRE STEADY: ([\d.]+) Gbps", float),
+        "gbps_wire_peak": (r"^WIRE PEAK: ([\d.]+) Gbps", float),
     }
 
     def __init__(self) -> None:
         self._built = False
         self.ami: str | None = None
+        # Pinned like the smoltcp driver's --zone: a refusal there is the
+        # verdict, rather than a hop to a zone the other arms did not use.
+        self.zone = os.environ.get("BENCH_ZONE") or None
 
     def add_arguments(self, ap) -> None:
         ap.add_argument(

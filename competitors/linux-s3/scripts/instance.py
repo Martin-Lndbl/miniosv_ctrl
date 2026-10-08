@@ -301,11 +301,12 @@ def fetch_binary():
     return True
 
 
-def run_bench():
+def run_bench(iface):
     """Streamed line by line, so a hung run still shows how far it got."""
     rule("bench")
     env = dict(os.environ)
     env.update({k: str(v) for k, v in CONFIG.items()})
+    env["BENCH_IFACE"] = iface
     # The binary has no resolver (static glibc); an address pins, none is
     # resolved here, once, as curl would.
     if not env.get("AWS_TARGET_IP"):
@@ -382,7 +383,7 @@ def main():
         before = counters(iface)
         cpu_before = cpu_times()
         t0 = time.monotonic()
-        rc = run_bench()
+        rc = run_bench(iface)
         report_cpu_budget(cpu0, percpu(), NQ if CAPPED else 0)
         elapsed = time.monotonic() - t0
         report_cpu(cpu_before, cpu_times(), elapsed)

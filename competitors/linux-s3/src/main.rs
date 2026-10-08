@@ -3,7 +3,7 @@ mod tune;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -85,6 +85,8 @@ struct Config {
     path: String,
     tuning: Tuning,
     mode: String,
+    /// The NIC whose rx_bytes the sampler reads; none prints no WIRE lines.
+    iface: Option<String>,
 }
 
 fn load_config() -> Result<Config, String> {
@@ -162,7 +164,7 @@ fn load_config() -> Result<Config, String> {
     };
 
     Ok(Config { workers, conns_per_worker, blocks_per_worker, object_size, block_size, stub, plain,
-                target_ip, host, path, tuning, mode })
+                target_ip, host, path, tuning, mode, iface: env("BENCH_IFACE") })
 }
 
 // Byte-identical to `lib.rs:797-806`, User-Agent included: an honest string
@@ -252,10 +254,6 @@ struct Outcome {
     /// Nanoseconds since the process epoch, so the worker clock can span
     /// "all connects issued" -> "last of the C done" (§3.6).
     finish_ns: u64,
-    /// Epoch-relative moment the TLS handshake finished. `lib.rs:1327` takes
-    /// the same instant; the max over a worker's connections is a wall clock
-    /// that can be subtracted from elapsed, which setup_ms cannot.
-    handshake_ns: u64,
 }
 
 /// Mirrors `stats::Dist` so one parser reads both logs.
@@ -390,8 +388,8 @@ fn run_conn(job: &Job, worker: usize, block: u64, barrier: Option<&Barrier>,
     let _ = sock.set_read_timeout(Some(STALL_TIMEOUT));
 
     match tls.as_mut() {
-        Some(tls) => pump(&sock, tls, &request, stub, tuning, worker, epoch, &mut out),
-        None => pump_plain(&sock, &request, tuning, worker, epoch, &mut out),
+        Some(tls) => pump(&sock, tls, &request, stub, tuning, worker, &mut out),
+        None => pump_plain(&sock, &request, tuning, worker, &mut out),
     }
     out.finish_ns = epoch.elapsed().as_nanos() as u64;
     out
@@ -404,7 +402,6 @@ fn pump_plain(
     request: &[u8],
     tuning: Tuning,
     worker: usize,
-    epoch: Instant,
     out: &mut Outcome,
 ) {
     let mut buf = vec![0u8; TLS_BUF_CAP];
@@ -416,8 +413,6 @@ fn pump_plain(
         println!("FAIL: q{worker}: write: {e}");
         return;
     }
-    // Stands in for "handshake finished": what TRANSFER excludes as setup.
-    out.handshake_ns = epoch.elapsed().as_nanos() as u64;
 
     loop {
         if tuning.quickack {
@@ -453,7 +448,6 @@ fn pump(
     stub: bool,
     tuning: Tuning,
     worker: usize,
-    epoch: Instant,
     out: &mut Outcome,
 ) {
     let mut incoming: Vec<u8> = Vec::with_capacity(TLS_BUF_CAP);
@@ -530,9 +524,6 @@ fn pump(
                     progress = true;
                 }
                 ConnectionState::WriteTraffic(mut wt) => {
-                    if !handshake_done {
-                        out.handshake_ns = epoch.elapsed().as_nanos() as u64;
-                    }
                     handshake_done = true;
                     if !request_queued {
                         let head = outgoing.len();
@@ -679,18 +670,42 @@ fn main() {
     // made the partitioned version drain for most of its wall clock.
     let next_block = AtomicU64::new(0);
     let total_blocks = (cfg.workers * cfg.blocks_per_worker) as u64;
+    // The first slot to find the pool empty: the end of the window in which
+    // every slot was busy (`lib.rs:317`).
+    let first_idle = AtomicU64::new(0);
+    // The NIC's byte counter every 10 ms from a thread of its own, the
+    // instrument the other two arms read: one clock, one counter.
+    let sampling = Arc::new(AtomicBool::new(true));
+    let sampler = cfg.iface.as_ref().map(|iface| {
+        let path = format!("/sys/class/net/{iface}/statistics/rx_bytes");
+        let (sampling, epoch) = (sampling.clone(), job.epoch);
+        std::thread::spawn(move || {
+            let mut samples: Vec<(u64, u64)> = Vec::with_capacity(1 << 16);
+            while sampling.load(Ordering::Relaxed) {
+                let t = Instant::now();
+                let read = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok());
+                if let Some(bytes) = read {
+                    samples.push((t.duration_since(epoch).as_nanos() as u64, bytes));
+                }
+                std::thread::sleep(Duration::from_millis(10).saturating_sub(t.elapsed()));
+            }
+            samples
+        })
+    });
     let overall = Instant::now();
     let outcomes: Vec<Outcome> = std::thread::scope(|s| {
         let handles: Vec<_> = (0..cfg.workers)
             .flat_map(|w| (0..cfg.conns_per_worker).map(move |i| (w, i)))
             .map(|(w, _i)| {
                 let (job, barrier, ws) = (&job, &barriers[w], &worker_start[w]);
-                let pool = &next_block;
+                let (pool, idle) = (&next_block, &first_idle);
                 s.spawn(move || {
                     let mut outs: Vec<Outcome> = Vec::new();
                     loop {
                         let block = pool.fetch_add(1, Ordering::Relaxed);
                         if block >= total_blocks {
+                            let now = job.epoch.elapsed().as_nanos() as u64;
+                            let _ = idle.compare_exchange(0, now, Ordering::Relaxed, Ordering::Relaxed);
                             break;
                         }
                         let first = outs.is_empty();
@@ -708,6 +723,9 @@ fn main() {
         handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
     });
     let overall_s = overall.elapsed().as_secs_f64();
+    let end_ns = job.epoch.elapsed().as_nanos() as u64;
+    sampling.store(false, Ordering::Relaxed);
+    let samples = sampler.map(|h| h.join().unwrap()).unwrap_or_default();
 
     // Bytes never requested, surfaced rather than left a silent gap
     // (`lib.rs:1290-1295`). Capped: a healthy run prints none, and a run that
@@ -755,17 +773,11 @@ fn main() {
     );
 
     // AGGREGATE is what a fetch costs end to end; this is what the stack
-    // sustains once connections exist. Not `worker_start`: that barrier sits
-    // *before* the connects, so it only covers thread startup and would
-    // subtract ~0.01 s instead of the connect and handshake. The last
-    // handshake to finish is the same instant `lib.rs:1327` takes, and workers
-    // overlap, so max not sum.
-    let setup_s = outcomes
-        .iter()
-        .map(|c| c.handshake_ns)
-        .max()
-        .unwrap_or(0) as f64
-        / 1e9;
+    // sustains once connections exist. The longest single SYN-to-Established,
+    // which is what `lib.rs:539` subtracts. A wall-clock "last handshake"
+    // instant was used here before, and once the pool re-dialled per block
+    // it sat near the end of the run and this line read 600-2000 Gbps.
+    let setup_s = setup_us.max as f64 / 1e6;
     let transfer_s = (overall_s - setup_s).max(1e-9);
     println!(
         "TRANSFER: {:.1} MiB in {:.3} s => {:.1} MB/s, {:.3} Gbps (setup {:.3} s excluded)",
@@ -775,6 +787,15 @@ fn main() {
         total_b as f64 * 8.0 / 1e9 / transfer_s,
         setup_s
     );
+
+    // Same window edges as `lib.rs:331-332`: the last worker's clock start,
+    // and the first slot that found the pool empty (the end if none did).
+    let full = worker_start.iter().map(|w| w.load(Ordering::Relaxed)).max().unwrap_or(0);
+    let idle = match first_idle.load(Ordering::Relaxed) {
+        0 => end_ns,
+        t => t,
+    };
+    wire_windows(&samples, full, idle);
 
     let ranges_ok = conns_clean == conns_total && conns_total > 0;
     let planned_conns = (cfg.workers * cfg.blocks_per_worker) as u64;
@@ -842,4 +863,47 @@ fn main() {
         );
         std::process::exit(1);
     }
+}
+
+fn gbps(bytes: u64, ns: u64) -> f64 {
+    bytes as f64 * 8.0 / 1e9 / (ns as f64 / 1e9).max(1e-9)
+}
+
+/// `lib.rs:774-811`: bytes on the wire over the one window in which every
+/// slot on the machine was busy, and the best second anywhere, read off the
+/// NIC's counter with a single clock.
+fn wire_windows(samples: &[(u64, u64)], full: u64, idle: u64) {
+    if samples.len() < 2 {
+        println!("WIRE: no interface to sample (set BENCH_IFACE)");
+        return;
+    }
+    let (t_a, b_a) = samples[0];
+    let (t_b, b_b) = samples[samples.len() - 1];
+    println!(
+        "WIRE: {:.3} Gbps of frames over the run ({} bytes received)",
+        gbps(b_b - b_a, t_b - t_a),
+        b_b - b_a
+    );
+    let at = |t: u64| samples.iter().find(|(ts, _)| *ts >= t).copied();
+    match (at(full), at(idle)) {
+        (Some((t0, b0)), Some((t1, b1))) if t1 > t0 => println!(
+            "WIRE STEADY: {:.3} Gbps of frames from {:.3} s to {:.3} s, every slot busy ({} B)",
+            gbps(b1 - b0, t1 - t0),
+            t0 as f64 / 1e9,
+            t1 as f64 / 1e9,
+            b1 - b0
+        ),
+        _ => println!("WIRE STEADY: no window in which every slot was busy"),
+    }
+    let mut best = 0f64;
+    let mut j = 0;
+    for i in 0..samples.len() {
+        while j < samples.len() && samples[j].0 < samples[i].0 + 1_000_000_000 {
+            j += 1;
+        }
+        if j < samples.len() {
+            best = best.max(gbps(samples[j].1 - samples[i].1, samples[j].0 - samples[i].0));
+        }
+    }
+    println!("WIRE PEAK: {:.3} Gbps of frames over the best second", best);
 }

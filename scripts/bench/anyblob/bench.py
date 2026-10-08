@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import httpserver  # noqa: E402
 import runner  # noqa: E402
 from httpserver import HttpServer  # noqa: E402
-from runner import COMMON_METRICS, ROOT, size  # noqa: E402
+from runner import ROOT, size  # noqa: E402
 
 # scripts/bench/linux-s3 is not an importable name; load it by path.
 _spec = importlib.util.spec_from_file_location(
@@ -78,15 +78,12 @@ class AnyBlob(LinuxS3):
     default_instance = "c6in.16xlarge"
     max_vm_seconds = 900
 
-    metrics = COMMON_METRICS | {
+    metrics = LinuxS3.metrics | {
         "workers_actual": (r"^bench: (\d+) workers", int),
         "http_bad": (r"^http status\s+: (\d+) non-206", int),
         "hdr_bad": (r"^response heads: (\d+) did not match", int),
         "tail_ms_max": (r"^TAIL STATS\s*: idle_max_ms=([\d.]+)", float),
         "tail_ms_avg": (r"^TAIL STATS\s*: .*idle_avg_ms=([\d.]+)", float),
-        "gbps_wire": (r"^WIRE: ([\d.]+) Gbps", float),
-        "gbps_wire_steady": (r"^WIRE STEADY: ([\d.]+) Gbps", float),
-        "gbps_wire_peak": (r"^WIRE PEAK: ([\d.]+) Gbps", float),
         "ttfb_us_avg": (r"^REQ STATS\s*: .*ttfb_us_avg=(\d+)", int),
         "wire_us_avg": (r"^REQ STATS\s*: .*wire_us_avg=(\d+)", int),
         "wire_us_p50": (r"^REQ STATS\s*: .*wire_us_p50=(\d+)", int),

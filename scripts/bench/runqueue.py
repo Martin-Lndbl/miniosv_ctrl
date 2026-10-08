@@ -169,7 +169,7 @@ def checks(a, xs: list[dict]) -> None:
         most = max(sum(runner.vcpus(x["instance"]) for x in g) for g in groups.values())
         print(f"concurrent : {len(groups)} group(s), up to {max(len(g) for g in groups.values())} instances at once, "
               f"{most} vCPUs (spot quota permitting)")
-    print(f"ttl        : {a.ttl // 60} min, retry every {a.retry_wait // 60} min while spot is refused")
+    print(f"ttl        : {a.ttl // 60} min, retry every {a.retry_wait} s while spot is refused")
 
 
 # -- submit ---------------------------------------------------------------
@@ -314,7 +314,7 @@ class Runner:
                 x["spot_refusals"] += 1
                 x["status"] = "waiting for spot"
                 self.save(status="waiting for spot")
-                self.event(f"{x['name']}: no spot in any zone ({x['spot_refusals']}x); retrying in {self.state['retry_wait_s'] // 60} min")
+                self.event(f"{x['name']}: no spot in any zone ({x['spot_refusals']}x); retrying in {self.state['retry_wait_s']} s")
                 until = min(now() + self.state["retry_wait_s"], self.deadline())
                 while now() < until and not self.stopping:
                     time.sleep(5)
@@ -588,7 +588,7 @@ def main() -> int:
                         "the experiments must not share a build tree (one miniOSv arm at most)")
     s.add_argument("--reps", type=int, default=None, help="overrides every experiment's reps")
     s.add_argument("--ttl", type=duration, default=TTL_DEFAULT, help="how long the queue may live (default 5h, max 6h)")
-    s.add_argument("--retry-wait", type=duration, default=600, help="between spot attempts (default 10m)")
+    s.add_argument("--retry-wait", type=duration, default=60, help="between spot attempts (default 1m)")
     s.add_argument("--market", choices=runner.MARKETS, default="spot")
     runner.add_profile_arg(s)
     s.add_argument("--dry-run", action="store_true", help="the checks and the plan, no runner")
